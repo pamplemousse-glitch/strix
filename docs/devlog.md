@@ -39,3 +39,46 @@ from a web page into a test file.
 **Throughput:** roughly 10M nodes/sec with ray-loop sliding attacks. That is the
 baseline magic bitboards have to beat in step 7b, and the number they must
 reproduce exactly.
+
+## 2026-09-15: Stage 2
+
+**Alpha-beta pruning, measured.** Negamax is kept permanently as the reference
+answer. Node counts at depth 4:
+
+| position | negamax | alpha-beta | kept |
+|---|---|---|---|
+| startpos | 206,604 | 2,036 | 1.0% |
+| kiwipete | 4,185,553 | 28,197 | 0.7% |
+| midgame | 3,986,610 | 124,632 | 3.1% |
+
+Kiwipete is a 148x reduction for an identical answer.
+
+**Bug injection on alpha-beta.** Passed the recursive window as `(-alpha, -beta)`
+instead of `(-beta, -alpha)`, a one-token swap.
+
+| test | result |
+|---|---|
+| all 6 perft positions | passed, correctly (move generation untouched) |
+| same score as negamax | FAILED |
+| finds mate in one | FAILED |
+| prefers winning material | FAILED |
+| "pruning saves a lot at depth 4" | **passed** |
+
+That last row is the lesson. **A completely broken search still passed the
+node-count test**, because it pruned plenty, just the wrong branches. Node counts
+prove a search is fast. Only the comparison against unpruned negamax proves it is
+right. Writing only the speed test ships this bug.
+
+**The horizon effect, observed live.** After 1.e4 e5 the engine reported +100 at
+depth 3 playing Nf3, then -100 at depth 4. Alpha-beta and negamax agreed at every
+depth, so the search was provably correct and this was not a bug: at depth 3 it
+sees Nxe5 winning a pawn and the recapture falls one ply past the horizon. The
+invariant test is what made that a thirty-second diagnosis instead of a hunt.
+
+Quiescence search fixed it. The score is now a flat 0 at every depth from that
+position.
+
+**Material-only eval cannot play chess.** With material alone every quiet move
+scores identically, so the engine played whatever was generated first: a2a3, every
+time, at every depth. Adding piece-square tables changed it to Nc3 and d4. This is
+why "material only" was never the destination.
