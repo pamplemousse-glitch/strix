@@ -24,10 +24,18 @@ package strix.harness;
  *
  * <h2>What this implementation is</h2>
  * The normal-approximation GSPRT, using the observed mean and variance of the pair
- * score. Fishtest uses a more exact formulation in terms of normalized Elo. The
- * approximation is standard, and it is verified in SprtTest by feeding it
- * synthetic results with a known win rate and checking it reaches the correct
- * verdict at the correct rate.
+ * score. Fishtest uses the EXACT GSPRT, which maximises the log-likelihood over the
+ * parameter space subject to H0 and H1 and expresses bounds in normalized Elo.
+ *
+ * The exact form is the better target and is recorded as such in ADR 0010. Note
+ * that {@link #MIN_PAIRS} exists only because of the approximation: dividing by an
+ * observed variance fails when that variance is zero, and the exact formulation has
+ * no such failure mode.
+ *
+ * Verified in SprtTest by feeding synthetic results from a player of known strength
+ * and checking both the verdict and the rate at which it is reached. That test is
+ * what caught the LLR of -3.6e9, and it is what would catch a botched port to the
+ * exact form.
  */
 public final class Sprt {
 
