@@ -165,12 +165,27 @@ from the durable log, needed 4 more, and settled in 27 seconds.
 
 ### First measured results, self-play, fixed 20k nodes
 
-| Feature removed | Elo | Games | Note |
+| Feature removed | Elo | Games to settle | Bounds |
 |---|---|---|---|
-| Move ordering | **+246.6** | 208 | bounds [0, 100] |
-| Piece-square tables | **+544.7** | 24 | bounds [0, 100], material-only barely plays chess |
-| Transposition table | inconclusive | 48 | bounds were wrong, re-running tight |
+| Piece-square tables | **+544.7** | 24 | [0, 100] |
+| Move ordering | **+246.6** | 208 | [0, 100] |
+| Transposition table | **+33.5** | 770 | [0, 15] |
+
+**The games column is the point.** 24, then 208, then 770: the smaller the effect,
+the more evidence it takes to prove. That is SPRT spending compute in proportion to
+how hard the question is. A fixed-game-count harness would have burned an identical
+budget on all three and learned less.
+
+The transposition table is also the one that behaved well under uncertainty. At the
+600-pair cap it reported **LLR +1.86 of the 2.94 needed, verdict CONTINUE**: a clear
+positive trend, honestly labelled as not yet proven. Resuming from the durable log
+took it to +3.01 and acceptance. Both earlier broken versions of this code would
+have returned a confident number there instead.
+
+**Cross-validation against Stage 2.** The pure node-count measurements taken days
+earlier ranked these features identically: move ordering cut the tree 27.7x while
+the transposition table alone managed 1.5x. Two independent methods, same ordering.
 
 These are **self-play** numbers. Rustic's documentation reports roughly 60% of
-self-play gains transfer to play against other engines, so treat these as upper
+self-play gains transfer to play against other engines, so treat them as upper
 bounds.

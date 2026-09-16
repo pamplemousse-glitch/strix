@@ -76,7 +76,29 @@ kiwipete depth 4   4,085,603
 The table alone is worth 1.5x. Move ordering is worth 27.7x. The transposition table's real
 contribution is supplying a good first move to try, not its cutoffs.
 
-**Strength.** [UNMEASURED] Will run as a labeled BOT on Lichess once Stage 3 can measure it.
+**What each feature is worth, measured.** Self-play SPRT at fixed 20,000 nodes per
+move, exact GSPRT with the pentanomial pair model:
+
+| Feature removed | Elo | Games to settle |
+|---|---|---|
+| Piece-square tables | +544.7 | 24 |
+| Move ordering | +246.6 | 208 |
+| Transposition table | +33.5 | 770 |
+
+The games column is the interesting one: the smaller the effect, the more evidence
+it takes. A fixed-game harness would have spent the same budget on all three.
+
+These are self-play figures and self-play inflates, since two builds of the same
+engine share every blind spot. Roughly 60% typically transfers.
+
+Reproduce any row:
+
+```bash
+./gradlew build
+java -cp build/classes/java/main strix.harness.Main 4 20000 1200 runs/x.tsv "Ordering=false" 100
+```
+
+**Strength.** [UNMEASURED] Will run as a labeled BOT on Lichess.
 
 Neither claim asks you to trust the author.
 

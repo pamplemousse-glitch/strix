@@ -3,3 +3,5 @@ build/
 *.class
 .DS_Store
 .idea/
+runs/
+.lichess-token
