@@ -64,8 +64,19 @@ startpos depth 5   4,865,609
 kiwipete depth 4   4,085,603
 ```
 
-**Strength.** [UNMEASURED] Runs as a labeled BOT on Lichess. Rating and full game history
-are public.
+**Pruning, measured.** Nodes to reach depth 6 from the starting position:
+
+| configuration | nodes | speedup |
+|---|---|---|
+| bare alpha-beta | 3,500,451 | 1.0x |
+| + transposition table | 2,384,099 | 1.5x |
+| + move ordering | 126,390 | 27.7x |
+| + both | 89,109 | 39.3x |
+
+The table alone is worth 1.5x. Move ordering is worth 27.7x. The transposition table's real
+contribution is supplying a good first move to try, not its cutoffs.
+
+**Strength.** [UNMEASURED] Will run as a labeled BOT on Lichess once Stage 3 can measure it.
 
 Neither claim asks you to trust the author.
 
@@ -80,9 +91,18 @@ To play against it, point any UCI GUI (Cute Chess, Arena, BanksiaGUI) at the bui
 
 ## Key design decisions
 
-Each links to an ADR recording what else was considered and what the choice cost.
+Each ADR records what else was considered and what the choice cost.
 
-[UNMEASURED] Populated as the decisions are made. See `docs/adr/`.
+- [0001](docs/adr/0001-bitboards-over-mailbox.md) Bitboards over a mailbox array
+- [0003](docs/adr/0003-pseudo-legal-generation.md) Pseudo-legal generation with a legality filter
+- [0004](docs/adr/0004-make-unmake-and-packed-moves.md) Make/unmake in place, moves packed into an int
+- [0005](docs/adr/0005-alpha-beta-not-pvs.md) Alpha-beta, and why negamax is kept forever
+- [0006](docs/adr/0006-quiescence-is-mandatory.md) Quiescence search
+- [0007](docs/adr/0007-transposition-table.md) Transposition table
+- [0008](docs/adr/0008-move-ordering.md) Move ordering
+
+`docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
+injection that a node-count test happily passed.
 
 ## What this is NOT
 
