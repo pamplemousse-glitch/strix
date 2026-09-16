@@ -128,3 +128,49 @@ Caught by the synthetic test: simulate a player of known strength, check the tes
 reaches the right verdict at the right rate. Verified across four cases, including
 that a genuinely worthless patch is rejected and the false-accept rate stays near
 the alpha of 0.05.
+
+## 2026-09-16: the first Elo measurements
+
+**A silent no-op edit.** A scripted edit to `UciEngine` searched for a string that
+did not exist in the file, replaced nothing, and printed "success" anyway, because
+the confirmation was unconditional. The next compile passed because nothing had
+changed. Caught by grepping for the symbol that should have appeared. Edits now
+assert that the content actually changed.
+
+**Fixed nodes is reproducible, and that was checked rather than assumed.**
+`go nodes 200000` from the same position returned the identical move three runs out
+of three. With move ordering disabled the engine reaches depth 3 in 20,000 nodes;
+with it on, depth 5. Two extra plies for the same work.
+
+**The exact GSPRT exposed a different small-sample failure.** Swapping the normal
+approximation for the exact form removed the divide-by-zero-variance bug, then
+produced its own: an engine losing at **-88.7 Elo** returned an LLR of **+15.71**
+after two pairs. With two pairs the observed mass sits in one or two buckets and
+there may be no distribution on that support with the hypothesised mean, so the
+root find runs to the edge of its bracket and returns nonsense.
+
+Fixed with a Jeffreys prior of 0.5 pseudo-counts per bucket. The generalisable
+lesson is that **small samples were the hazard in both formulations**, and the
+synthetic known-strength test is the only thing that found either one.
+
+**The bounds mistake, in both directions.** See ADR 0012. Measuring a +240 Elo
+ablation with Fishtest's `[0, 5]` bounds produced an LLR of +0.92 after 71 pairs;
+the same data under `[0, 100]` gave +23.01. And the transposition table returned
+H0_ACCEPTED at -29 Elo after 48 games, which means "not worth 100 Elo", not
+"worthless". The second is the dangerous one: a fast, confident, misreadable
+rejection that invites deleting a feature that was helping.
+
+**Resume worked.** Killing the runner mid-match and restarting picked up 100 pairs
+from the durable log, needed 4 more, and settled in 27 seconds.
+
+### First measured results, self-play, fixed 20k nodes
+
+| Feature removed | Elo | Games | Note |
+|---|---|---|---|
+| Move ordering | **+246.6** | 208 | bounds [0, 100] |
+| Piece-square tables | **+544.7** | 24 | bounds [0, 100], material-only barely plays chess |
+| Transposition table | inconclusive | 48 | bounds were wrong, re-running tight |
+
+These are **self-play** numbers. Rustic's documentation reports roughly 60% of
+self-play gains transfer to play against other engines, so treat these as upper
+bounds.

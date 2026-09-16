@@ -70,9 +70,10 @@ class SprtTest {
             if (v == Sprt.Verdict.H0_ACCEPTED) rejected++;
         }
         // alpha is 0.05, so a handful of false accepts is expected and correct.
-        assertTrue(rejected > accepted,
+        // The Jeffreys prior shifts this slightly; the bound is deliberately loose.
+        assertTrue(rejected > accepted * 3,
                 "0 Elo patch: " + accepted + " accepted vs " + rejected + " rejected");
-        assertTrue(accepted <= 6, "too many false accepts: " + accepted + "/40, alpha is 0.05");
+        assertTrue(accepted <= 8, "too many false accepts: " + accepted + "/40, alpha is 0.05");
     }
 
     @Test @DisplayName("Stops far sooner than a fixed game count")

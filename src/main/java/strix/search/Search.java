@@ -22,7 +22,7 @@ public final class Search {
     public static final int INFINITY = 31_000;
     private static final int MAX_PLY = 64;
 
-    private final Evaluator evaluator;
+    private Evaluator evaluator;
     private final int[][] moveBuf = new int[MAX_PLY][MoveGen.MAX_MOVES];
     private final int[][] scratch = new int[MAX_PLY][MoveGen.MAX_MOVES];
 
@@ -36,6 +36,8 @@ public final class Search {
 
     private volatile boolean stopped;
     private long deadline = Long.MAX_VALUE;
+    private long nodeLimit = Long.MAX_VALUE;
+    private long nodesThisMove;
     private Listener listener = (d, sc, n, ms, mv) -> {};
 
     /** Receives one call per completed iteration, for UCI info lines. */
@@ -48,6 +50,8 @@ public final class Search {
     }
 
     public void setListener(Listener l) { this.listener = l; }
+
+    public void setEvaluator(Evaluator e) { this.evaluator = e; }
 
     /** Callable from another thread. */
     public void stop() { stopped = true; }
@@ -69,6 +73,11 @@ public final class Search {
         long budget = limits.allocate(board.sideToMove);
         deadline = (budget == Long.MAX_VALUE) ? Long.MAX_VALUE : start + budget;
 
+        long nodeBudget = limits.allocateNodes(board.sideToMove);
+        nodeLimit = (nodeBudget <= 0) ? Long.MAX_VALUE : nodeBudget;
+        nodesThisMove = 0;
+        boolean byNodes = nodeLimit != Long.MAX_VALUE;
+
         if (ordering != null) ordering.clear();
 
         int completedMove = Move.NONE;
@@ -87,7 +96,11 @@ public final class Search {
 
             // No point starting an iteration we cannot possibly finish. The next
             // one costs several times this one, so half the budget is the cutoff.
-            if (System.currentTimeMillis() - start > budget / 2) break;
+            if (byNodes) {
+                if (nodesThisMove > nodeLimit / 2) break;
+            } else if (System.currentTimeMillis() - start > budget / 2) {
+                break;
+            }
             if (Math.abs(score) > MATE - MAX_PLY) break;   // forced mate found
         }
 
@@ -140,7 +153,11 @@ public final class Search {
      * negamax and needs its own tests.
      */
     private int quiescence(Board board, int alpha, int beta, int ply) {
-        if ((++nodes & 2047L) == 0L && System.currentTimeMillis() >= deadline) stopped = true;
+        nodesThisMove++;
+        if ((++nodes & 2047L) == 0L) {
+            if (nodesThisMove >= nodeLimit) stopped = true;
+            else if (System.currentTimeMillis() >= deadline) stopped = true;
+        }
         if (stopped) return 0;
         if (ply >= MAX_PLY - 1) return evaluator.evaluate(board);
 
@@ -170,7 +187,11 @@ public final class Search {
     private int alphaBeta(Board board, int depth, int alpha, int beta, int ply, boolean root) {
         // Checking the clock costs a syscall, so do it every 2048 nodes rather
         // than every node.
-        if ((++nodes & 2047L) == 0L && System.currentTimeMillis() >= deadline) stopped = true;
+        nodesThisMove++;
+        if ((++nodes & 2047L) == 0L) {
+            if (nodesThisMove >= nodeLimit) stopped = true;
+            else if (System.currentTimeMillis() >= deadline) stopped = true;
+        }
         if (stopped && !root) return 0;
 
         // A draw is a draw regardless of how good the position looks. Without

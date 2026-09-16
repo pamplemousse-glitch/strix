@@ -1,6 +1,7 @@
 package strix.uci;
 
 import strix.core.*;
+import strix.eval.Material;
 import strix.eval.Psqt;
 import strix.search.Search;
 import strix.search.SearchLimits;
@@ -48,8 +49,13 @@ public final class Main {
                 case "uci" -> {
                     out("id name " + NAME);
                     out("id author " + AUTHOR);
+                    out("option name nodestime type spin default 0 min 0 max 10000");
+                    out("option name Hash type spin default 64 min 0 max 1024");
+                    out("option name Ordering type check default true");
+                    out("option name Eval type combo default psqt var psqt var material");
                     out("uciok");
                 }
+                case "setoption" -> { join(); setOption(tok); }
                 case "isready" -> { join(); out("readyok"); }
                 case "ucinewgame" -> { join(); board = Fen.parse(Fen.START); tt.clear(); }
                 case "position" -> { join(); position(tok); }
@@ -58,6 +64,31 @@ public final class Main {
                 case "quit" -> { search.stop(); join(); return; }
                 default -> { /* UCI says ignore unknown commands */ }
             }
+        }
+    }
+
+    private long nodestime;
+
+    private void setOption(String[] tok) {
+        // setoption name <key> value <val>
+        int valueAt = -1;
+        for (int i = 0; i < tok.length; i++) if (tok[i].equals("value")) valueAt = i;
+        if (valueAt < 0 || valueAt + 1 >= tok.length) return;
+        StringBuilder key = new StringBuilder();
+        for (int i = 2; i < valueAt; i++) key.append(i > 2 ? " " : "").append(tok[i]);
+        String k = key.toString();
+        String v = tok[valueAt + 1];
+        if (k.equalsIgnoreCase("nodestime")) {
+            nodestime = Long.parseLong(v);
+        } else if (k.equalsIgnoreCase("Hash")) {
+            // 0 disables the table entirely, which is how the harness measures
+            // what the table is worth.
+            int mb = Integer.parseInt(v);
+            search.tt = (mb <= 0) ? null : new TranspositionTable(mb);
+        } else if (k.equalsIgnoreCase("Ordering")) {
+            search.ordering = Boolean.parseBoolean(v) ? new Ordering() : null;
+        } else if (k.equalsIgnoreCase("Eval")) {
+            search.setEvaluator(v.equalsIgnoreCase("material") ? new Material() : new Psqt());
         }
     }
 
@@ -103,11 +134,13 @@ public final class Main {
                 case "winc" -> limits.winc = Long.parseLong(tok[++i]);
                 case "binc" -> limits.binc = Long.parseLong(tok[++i]);
                 case "movetime" -> limits.movetime = Long.parseLong(tok[++i]);
+                case "nodes" -> limits.nodes = Long.parseLong(tok[++i]);
                 case "depth" -> limits.depth = Integer.parseInt(tok[++i]);
                 case "infinite" -> limits.infinite = true;
                 default -> { }
             }
         }
+        limits.nodestime = nodestime;
         worker = new Thread(() -> {
             search.think(board, limits);
             int best = search.bestMove;

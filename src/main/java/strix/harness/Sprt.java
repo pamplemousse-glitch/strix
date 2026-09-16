@@ -23,34 +23,28 @@ package strix.harness;
  * incomplete batch rather than splitting one.
  *
  * <h2>What this implementation is</h2>
- * The normal-approximation GSPRT, using the observed mean and variance of the pair
- * score. Fishtest uses the EXACT GSPRT, which maximises the log-likelihood over the
- * parameter space subject to H0 and H1 and expresses bounds in normalized Elo.
- *
- * The exact form is the better target and is recorded as such in ADR 0010. Note
- * that {@link #MIN_PAIRS} exists only because of the approximation: dividing by an
- * observed variance fails when that variance is zero, and the exact formulation has
- * no such failure mode.
+ * The exact GSPRT, in {@link Gsprt}. An earlier version used the normal
+ * approximation and had to be abandoned: it divided by an observed variance that
+ * is zero when early pairs all score alike, which produced an LLR of -3.6e9 after
+ * two pairs. See docs/adr/0010.
  *
  * Verified in SprtTest by feeding synthetic results from a player of known strength
  * and checking both the verdict and the rate at which it is reached. That test is
- * what caught the LLR of -3.6e9, and it is what would catch a botched port to the
- * exact form.
+ * what caught the -3.6e9 bug, and it is what validates this port.
  */
 public final class Sprt {
 
     public enum Verdict { CONTINUE, H1_ACCEPTED, H0_ACCEPTED }
 
     /**
-     * No verdict before this many pairs, whatever the LLR says.
+     * A small floor, kept for a different reason than before.
      *
-     * The normal approximation needs an observed variance, and with a handful of
-     * samples that variance can be zero (every pair scoring identically). Dividing
-     * by it then produces an LLR in the billions and an instant, confident, wrong
-     * verdict. Observed directly: a +40 Elo patch was rejected after 2 pairs with
-     * an LLR of -3.6e9.
+     * The old normal approximation needed a guard of 16 because it divided by an
+     * observed variance that could be zero. The exact GSPRT has no such failure
+     * mode, so this is now only a sanity floor: with a single pair there is no
+     * distribution shape to fit at all.
      */
-    public static final int MIN_PAIRS = 16;
+    public static final int MIN_PAIRS = 2;
 
     public final double elo0, elo1, lowerBound, upperBound;
 
@@ -82,10 +76,6 @@ public final class Sprt {
 
     public long gameCount() { return pairCount() * 2; }
 
-    private static double expectedScore(double elo) {
-        return 1.0 / (1.0 + Math.pow(10.0, -elo / 400.0));
-    }
-
     /** Observed mean score per game, in [0, 1]. */
     public double score() {
         long n = pairCount();
@@ -97,33 +87,12 @@ public final class Sprt {
 
     /** Observed Elo difference implied by the current score. */
     public double elo() {
-        double s = score();
-        if (s <= 0.0) return -800;
-        if (s >= 1.0) return 800;
-        return -400.0 * Math.log10(1.0 / s - 1.0);
+        return Gsprt.eloOf(score());
     }
 
     public double llr() {
-        long n = pairCount();
-        if (n < MIN_PAIRS) return 0.0;
-
-        double mean = score();
-        double variance = 0;
-        for (int i = 0; i < 5; i++) {
-            double d = (i / 4.0) - mean;
-            variance += pairs[i] * d * d;
-        }
-        variance /= n;
-
-        // Every pair scored identically. That is not infinite certainty, it is
-        // not enough information yet. Say so rather than dividing by ~zero.
-        if (variance <= 1e-9) return 0.0;
-
-        double s0 = expectedScore(elo0);
-        double s1 = expectedScore(elo1);
-
-        // Normal-approximation GSPRT: how much better does H1 explain the data than H0.
-        return n * (s1 - s0) * (2 * mean - s0 - s1) / (2 * variance);
+        if (pairCount() < MIN_PAIRS) return 0.0;
+        return Gsprt.llr(pairs, Gsprt.expectedScore(elo0), Gsprt.expectedScore(elo1));
     }
 
     public Verdict verdict() {
