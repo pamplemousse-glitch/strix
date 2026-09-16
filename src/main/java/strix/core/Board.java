@@ -43,6 +43,7 @@ public final class Board {
     }
 
     private final int[] undo = new int[1024];
+    private final long[] history = new long[1024];
     private int ply;
 
     public Board() {
@@ -124,6 +125,7 @@ public final class Board {
             captured = mailbox[to];
         }
 
+        history[ply] = hash;
         undo[ply++] = packUndo(captured == Piece.NONE ? 0xF : captured,
                 castling, epSquare, halfmoveClock);
 
@@ -207,6 +209,55 @@ public final class Board {
         } else if (captured != Piece.NONE) {
             put(captured, to);
         }
+    }
+
+    /**
+     * Has this position occurred {@code times} times already, counting the current one?
+     *
+     * Only positions since the last irreversible move can possibly repeat, because a
+     * capture or a pawn move can never be undone by playing on. The halfmove clock
+     * counts exactly that, so it bounds how far back to look.
+     *
+     * Positions two plies apart are the only candidates, since the side to move has
+     * to match, hence the step of 2.
+     */
+    public boolean isRepetition(int times) {
+        int seen = 1;
+        int limit = Math.min(halfmoveClock, ply);
+        for (int back = 2; back <= limit; back += 2) {
+            if (history[ply - back] == hash && ++seen >= times) return true;
+        }
+        return false;
+    }
+
+    /** 100 plies, not 50 moves. A "move" is one from each side. */
+    public boolean isFiftyMoveDraw() {
+        return halfmoveClock >= 100;
+    }
+
+    /**
+     * Positions where checkmate is impossible for either side no matter how badly
+     * they play: bare kings, king and one minor piece, and king and bishop against
+     * king and bishop on the same colour square.
+     */
+    public boolean isInsufficientMaterial() {
+        if ((bb[Piece.index(Piece.WHITE, Piece.PAWN)] | bb[Piece.index(Piece.BLACK, Piece.PAWN)]) != 0L) return false;
+        if ((bb[Piece.index(Piece.WHITE, Piece.ROOK)] | bb[Piece.index(Piece.BLACK, Piece.ROOK)]) != 0L) return false;
+        if ((bb[Piece.index(Piece.WHITE, Piece.QUEEN)] | bb[Piece.index(Piece.BLACK, Piece.QUEEN)]) != 0L) return false;
+
+        long knights = bb[Piece.index(Piece.WHITE, Piece.KNIGHT)] | bb[Piece.index(Piece.BLACK, Piece.KNIGHT)];
+        long bishops = bb[Piece.index(Piece.WHITE, Piece.BISHOP)] | bb[Piece.index(Piece.BLACK, Piece.BISHOP)];
+        int minors = Long.bitCount(knights) + Long.bitCount(bishops);
+
+        if (minors <= 1) return true;                       // K v K, K+N v K, K+B v K
+        if (minors == 2 && Long.bitCount(bishops) == 2) {
+            // Two bishops on the same colour complex cannot mate.
+            long dark = 0xAA55AA55AA55AA55L;
+            boolean bothDark = (bishops & dark) == bishops;
+            boolean bothLight = (bishops & ~dark) == bishops;
+            return bothDark || bothLight;
+        }
+        return false;
     }
 
     /** ASCII diagram, white at the bottom. For eyeballing during step 1. */

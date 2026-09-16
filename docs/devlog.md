@@ -82,3 +82,49 @@ position.
 scores identically, so the engine played whatever was generated first: a2a3, every
 time, at every depth. Adding piece-square tables changed it to Nc3 and d4. This is
 why "material only" was never the destination.
+
+## 2026-09-16: Stage 3 begins
+
+**Draw detection was missing entirely.** Before any match can be run, something has
+to decide when a game is over, and Strix could only detect checkmate and stalemate.
+No threefold repetition, no fifty-move rule, no insufficient material. Two engines
+would shuffle forever and no match would ever terminate. It was also a real playing
+bug: the engine would happily repeat a position while winning.
+
+Three of the five new tests failed on the first run, and **all three were my test
+positions, not the engine**:
+
+- The "stalemate" FEN wasn't stalemate. The white king could still run to b1.
+- The repetition test shuffled rooks from their **home squares**, so the very first
+  move permanently destroyed a castling right. The position after the cycle was not
+  the same position, and the Zobrist hash correctly said so.
+
+That second one is the same lesson as the en passant case from Stage 2: **castling
+rights and en passant squares are part of a position's identity**, not decoration
+on top of piece placement. Learned it twice from opposite directions.
+
+**The SPRT bug, which is the one worth remembering.**
+
+The class comment I wrote said porting statistics you did not derive is exactly the
+situation that needs an external check. It then immediately proved itself.
+
+A +40 Elo patch was being REJECTED after 2 pairs, with an LLR of **-3,649,310,055**.
+
+Cause: the normal-approximation GSPRT divides by the observed variance of the pair
+score. With two samples that variance can be exactly zero (both pairs scoring the
+same), and I had clamped it to `1e-12` rather than treating it as insufficient
+information. Dividing by 1e-12 produces billions, which crosses a bound of 2.94
+instantly.
+
+The failure mode matters more than the fix. This would not have looked like a bug.
+It produces a clean number, a confident verdict, and a fast answer. **Every
+measurement in Stage 3 and Stage 4 would have been authoritative-looking garbage**,
+and NNUE would have been tuned against noise.
+
+Fix: a minimum of 16 pairs before any verdict, and zero observed variance returns
+an LLR of 0 (keep playing) instead of infinity.
+
+Caught by the synthetic test: simulate a player of known strength, check the test
+reaches the right verdict at the right rate. Verified across four cases, including
+that a genuinely worthless patch is rejected and the false-accept rate stays near
+the alpha of 0.05.

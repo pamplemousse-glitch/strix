@@ -173,6 +173,18 @@ public final class Search {
         if ((++nodes & 2047L) == 0L && System.currentTimeMillis() >= deadline) stopped = true;
         if (stopped && !root) return 0;
 
+        // A draw is a draw regardless of how good the position looks. Without
+        // this the engine will happily repeat while winning, and will not steer
+        // toward repetition when losing.
+        //
+        // Two occurrences, not three: inside a search, a single repetition already
+        // means the side to move can force the draw, so treating it as one avoids
+        // wasting depth proving it twice.
+        if (!root && (board.isRepetition(2) || board.isFiftyMoveDraw()
+                || board.isInsufficientMaterial())) {
+            return 0;
+        }
+
         int alphaOriginal = alpha;
         int ttMove = Move.NONE;
         if (tt != null) {
