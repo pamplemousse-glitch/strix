@@ -4,6 +4,8 @@ import strix.core.*;
 import strix.eval.Psqt;
 import strix.search.Search;
 import strix.search.SearchLimits;
+import strix.search.Ordering;
+import strix.search.TranspositionTable;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -25,6 +27,7 @@ public final class Main {
 
     private Board board = Fen.parse(Fen.START);
     private final Search search = new Search(new Psqt());
+    private final TranspositionTable tt = new TranspositionTable(64);
     private Thread worker;
 
     public static void main(String[] args) throws Exception {
@@ -32,6 +35,8 @@ public final class Main {
     }
 
     private void run() throws Exception {
+        search.tt = tt;
+        search.ordering = new Ordering();
         search.setListener(this::info);
         var in = new BufferedReader(new InputStreamReader(System.in));
         String line;
@@ -46,7 +51,7 @@ public final class Main {
                     out("uciok");
                 }
                 case "isready" -> { join(); out("readyok"); }
-                case "ucinewgame" -> { join(); board = Fen.parse(Fen.START); }
+                case "ucinewgame" -> { join(); board = Fen.parse(Fen.START); tt.clear(); }
                 case "position" -> { join(); position(tok); }
                 case "go" -> go(tok);
                 case "stop" -> { search.stop(); join(); }

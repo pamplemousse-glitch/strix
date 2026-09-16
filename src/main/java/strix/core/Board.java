@@ -20,6 +20,9 @@ public final class Board {
     public int halfmoveClock;
     public int fullmove;
 
+    /** Maintained incrementally. Must always equal Zobrist.compute(this). */
+    public long hash;
+
     public static final int CASTLE_WK = 1, CASTLE_WQ = 2, CASTLE_BK = 4, CASTLE_BQ = 8;
 
     /**
@@ -53,6 +56,7 @@ public final class Board {
         byColor[Piece.colorOf(piece)] |= 1L << sq;
         occupied |= 1L << sq;
         mailbox[sq] = piece;
+        hash ^= Zobrist.PIECE[piece][sq];
     }
 
     private void remove(int piece, int sq) {
@@ -61,6 +65,7 @@ public final class Board {
         byColor[Piece.colorOf(piece)] &= mask;
         occupied &= mask;
         mailbox[sq] = Piece.NONE;
+        hash ^= Zobrist.PIECE[piece][sq];
     }
 
     private void relocate(int piece, int from, int to) {
@@ -70,6 +75,7 @@ public final class Board {
         occupied ^= mask;
         mailbox[from] = Piece.NONE;
         mailbox[to] = piece;
+        hash ^= Zobrist.PIECE[piece][from] ^ Zobrist.PIECE[piece][to];
     }
 
     public long pieces(int color, int type) { return bb[Piece.index(color, type)]; }
@@ -143,13 +149,19 @@ public final class Board {
             relocate(Piece.index(us, Piece.ROOK), rank, rank + 3);
         }
 
+        hash ^= Zobrist.CASTLING[castling];
         castling &= CASTLE_MASK[from] & CASTLE_MASK[to];
+        hash ^= Zobrist.CASTLING[castling];
+
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
         epSquare = (flag == Move.DOUBLE_PUSH) ? ((from + to) / 2) : Square.NONE;
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
 
         boolean pawnMove = Piece.typeOf(piece) == Piece.PAWN;
         halfmoveClock = (pawnMove || captured != Piece.NONE) ? 0 : halfmoveClock + 1;
         if (us == Piece.BLACK) fullmove++;
         sideToMove = them;
+        hash ^= Zobrist.SIDE;
     }
 
     public void unmake(int move) {
@@ -162,9 +174,15 @@ public final class Board {
         int them = Piece.other(us);
         if (us == Piece.BLACK) fullmove--;
 
+        hash ^= Zobrist.SIDE;
+
         int u = undo[--ply];
+        hash ^= Zobrist.CASTLING[castling];
         castling = undoCastling(u);
+        hash ^= Zobrist.CASTLING[castling];
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
         epSquare = undoEp(u);
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
         halfmoveClock = undoClock(u);
         int captured = undoCaptured(u);
 

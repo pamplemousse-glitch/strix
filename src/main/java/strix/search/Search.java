@@ -29,8 +29,10 @@ public final class Search {
     public long nodes;
     public int bestMove;
 
-    /** Off for the negamax-vs-alphabeta invariant test, on for real play. */
+    /** Both off for the negamax-vs-alphabeta invariant test, on for real play. */
     public boolean useQuiescence = true;
+    public TranspositionTable tt;
+    public Ordering ordering;
 
     private volatile boolean stopped;
     private long deadline = Long.MAX_VALUE;
@@ -66,6 +68,8 @@ public final class Search {
         long start = System.currentTimeMillis();
         long budget = limits.allocate(board.sideToMove);
         deadline = (budget == Long.MAX_VALUE) ? Long.MAX_VALUE : start + budget;
+
+        if (ordering != null) ordering.clear();
 
         int completedMove = Move.NONE;
         int completedScore = 0;
@@ -168,6 +172,17 @@ public final class Search {
         // than every node.
         if ((++nodes & 2047L) == 0L && System.currentTimeMillis() >= deadline) stopped = true;
         if (stopped && !root) return 0;
+
+        int alphaOriginal = alpha;
+        int ttMove = Move.NONE;
+        if (tt != null) {
+            if (!root) {
+                int hit = tt.probe(board.hash, depth, alpha, beta, ply);
+                if (hit != TranspositionTable.MISS) return hit;
+            }
+            ttMove = tt.probeMove(board.hash);
+        }
+
         int[] moves = moveBuf[ply];
         int n = MoveGen.generateLegal(board, moves, scratch[ply]);
 
@@ -176,20 +191,39 @@ public final class Search {
             return useQuiescence ? quiescence(board, alpha, beta, ply) : evaluator.evaluate(board);
         }
 
+        int bestScore = -INFINITY;
+        int bestLocal = Move.NONE;
+
         for (int i = 0; i < n; i++) {
-            board.make(moves[i]);
+            if (ordering != null) ordering.pickBest(board, moves, n, i, ttMove, ply);
+            int move = moves[i];
+
+            board.make(move);
             int score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, false);
-            board.unmake(moves[i]);
+            board.unmake(move);
 
-            // The opponent already has a reply at least this good, so they will
-            // never let us reach this position. Stop looking at our other moves.
-            if (score >= beta) return beta;
-
+            if (score > bestScore) {
+                bestScore = score;
+                bestLocal = move;
+            }
             if (score > alpha) {
                 alpha = score;
-                if (root) bestMove = moves[i];
+                if (root) bestMove = move;
+            }
+            // The opponent already has a reply at least this good, so they will
+            // never let us reach this position. Stop looking at our other moves.
+            if (alpha >= beta) {
+                if (ordering != null) ordering.onCutoff(board, move, depth, ply);
+                break;
             }
         }
-        return alpha;
+
+        if (tt != null && !stopped) {
+            int flag = (bestScore <= alphaOriginal) ? TranspositionTable.UPPER
+                     : (bestScore >= beta) ? TranspositionTable.LOWER
+                     : TranspositionTable.EXACT;
+            tt.store(board.hash, depth, bestScore, flag, bestLocal, ply);
+        }
+        return bestScore;
     }
 }
