@@ -128,6 +128,17 @@ public final class Network {
     public void adjustFeatureBias(int h, float delta) { featureBias[h] += delta; }
     public void adjustFeatureWeight(int f, int h, float delta) { featureWeights[f][h] += delta; }
 
+    /** Hold a feature weight inside +/- limit, so the accumulator cannot outgrow the activation. */
+    public void clipFeatureWeight(int f, int h, float limit) {
+        float w = featureWeights[f][h];
+        if (w > limit) featureWeights[f][h] = limit;
+        else if (w < -limit) featureWeights[f][h] = -limit;
+    }
+
+    public void initFeatureBias(float value) {
+        java.util.Arrays.fill(featureBias, value);
+    }
+
     /** Small random weights, for testing the plumbing before any training exists. */
     public static Network random(long seed) {
         Network n = new Network();

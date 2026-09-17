@@ -74,7 +74,7 @@ class NnueTest {
             walk(board, acc, depth - 1, fen);
 
             board.unmake(move);
-            acc.refresh(board);             // unmake by rebuilding, see note below
+            acc.unmake();                   // a pop, not a reverse delta
             assertArrayEquals(before, acc.snapshot(Piece.WHITE), 1e-3f,
                     () -> "unmake did not restore state after " + Move.toUci(move));
         }

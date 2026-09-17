@@ -40,8 +40,31 @@ import java.util.SplittableRandom;
  */
 public final class Trainer {
 
-    private static final float LR = 0.01f;
+    private static final float LR = 0.003f;
     private static final float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
+
+    /**
+     * Feature weights are clipped to this after every update, and it is the single
+     * most important number in this file.
+     *
+     * The clipped ReLU passes gradient only on (0, 1). Outside that window the
+     * derivative is exactly zero, so a unit that leaves can never come back. At
+     * most 32 features are active at once, so if weights are free to grow the
+     * accumulator spreads far wider than the activation window and the units die.
+     *
+     * Measured on the first trained network: accumulator range [-15.31, 9.38],
+     * 254 of 256 units dead, 1 live. That is not a 256-neuron network, it is a
+     * 2-neuron one, and it lost to piece-square tables by 249 Elo.
+     *
+     * Sizing it: with 32 active features of mixed sign the sum scales as
+     * sqrt(32) * w, about 5.7w. Starting from a bias of 0.5, a swing of +/- 0.5
+     * fills the window, so w is about 0.09.
+     *
+     * 0.02 was tried first and was four times too tight: units stayed alive but the
+     * held-out loss was four times worse, because the network could not express
+     * anything. See ADR 0014.
+     */
+    private static final float FEATURE_CLIP = 0.09f;
 
     /** Sparse: the active feature indices for each perspective, plus the target. */
     private record Sample(int[] own, int[] opp, float target) {}
@@ -62,6 +85,9 @@ public final class Trainer {
         System.out.printf("train %,d   validate %,d%n%n", train.size(), validate.size());
 
         Network net = Network.random(0xC0FFEE);
+        // Start the units inside the activation window rather than at its edge, so
+        // they have somewhere to move before the gradient vanishes.
+        net.initFeatureBias(0.5f);
         Adam adam = new Adam();
 
         double bestValidation = Double.MAX_VALUE;
@@ -82,8 +108,12 @@ public final class Trainer {
 
             long secs = (System.currentTimeMillis() - t0) / 1000;
             boolean better = validation < bestValidation;
-            System.out.printf("epoch %2d  train %.6f  validate %.6f %s (%ds)%n",
-                    epoch, loss, validation, better ? "" : "  <- worse", secs);
+            // Live units are the health metric that actually matters here. A
+            // falling loss with a dying network is the failure this whole run
+            // exists to avoid repeating.
+            System.out.printf("epoch %2d  train %.6f  validate %.6f  live %d/%d %s (%ds)%n",
+                    epoch, loss, validation, liveUnits(net, validate.get(0)), Network.HIDDEN,
+                    better ? "" : "  <- worse", secs);
 
             if (better) {
                 bestValidation = validation;
@@ -168,6 +198,16 @@ public final class Trainer {
 
     private static float clamp(float x) { return x < 0f ? 0f : (x > 1f ? 1f : x); }
 
+    /** Hidden units strictly inside (0, 1), and therefore still able to learn. */
+    private static int liveUnits(Network net, Sample s) {
+        float[] own = new float[Network.HIDDEN];
+        System.arraycopy(net.featureBias(), 0, own, 0, Network.HIDDEN);
+        for (int f : s.own()) net.addTo(own, f);
+        int live = 0;
+        for (float v : own) if (v > 0f && v < 1f) live++;
+        return live;
+    }
+
     private static Network copy(Network n) throws IOException {
         Path tmp = Files.createTempFile("strix-net", ".bin");
         n.save(tmp);
@@ -217,6 +257,7 @@ public final class Trainer {
             for (int h = 0; h < Network.HIDDEN; h++) {
                 if (grads[h] == 0f) continue;
                 net.adjustFeatureWeight(f, h, -update(grads[h], m, v, h));
+                net.clipFeatureWeight(f, h, FEATURE_CLIP);
             }
         }
     }

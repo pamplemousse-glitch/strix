@@ -53,6 +53,7 @@ public final class Main {
                     out("option name Hash type spin default 64 min 0 max 1024");
                     out("option name Ordering type check default true");
                     out("option name Eval type combo default psqt var psqt var material");
+                    out("option name NetFile type string default <empty>");
                     out("option name TuneFile type string default <empty>");
                     out("uciok");
                 }
@@ -95,6 +96,12 @@ public final class Main {
                 strix.eval.Tunable.loadRaw(java.nio.file.Path.of(v));
             } catch (Exception e) {
                 System.err.println("could not load " + v + ": " + e.getMessage());
+            }
+        } else if (k.equalsIgnoreCase("NetFile")) {
+            try {
+                search.setEvaluator(strix.nnue.NnueEvaluator.load(java.nio.file.Path.of(v)));
+            } catch (Exception e) {
+                System.err.println("could not load net " + v + ": " + e.getMessage());
             }
         } else if (k.equalsIgnoreCase("Eval")) {
             search.setEvaluator(v.equalsIgnoreCase("material") ? new Material() : new Psqt());

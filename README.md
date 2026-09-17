@@ -86,14 +86,24 @@ move, exact GSPRT with the pentanomial pair model:
 | Transposition table | +33.5 | 770 |
 | Magic bitboards | +31% nps, 0 Elo by design | n/a |
 | **Texel tuning** | **-57.6, rejected** | 560 |
+| **NNUE** | **-330.5, rejected** | 104 |
 
 The games column is the interesting one: the smaller the effect, the more evidence
 it takes. A fixed-game harness would have spent the same budget on all of them.
 
-**The Texel row is the useful one.** Training error fell, held-out error fell, and the
-tuned tables looked correct. The engine was 57.6 Elo worse. The tuned values are not
-shipped. See [ADR 0013](docs/adr/0013-texel-tuning-rejected.md) for why, and for what
-it implies about where NNUE has to get its training data.
+**The two rejected rows are the useful ones.** In both cases every proxy metric improved
+and the engine got worse, and the only thing that disagreed was several hundred games of
+chess. Neither change is shipped.
+
+[ADR 0013](docs/adr/0013-texel-tuning-rejected.md) covers Texel tuning.
+[ADR 0014](docs/adr/0014-nnue-rejected.md) covers NNUE, including a real bug found along
+the way (254 of 256 hidden units dead, because the accumulator spanned [-15, 9] against a
+clipped ReLU window of [0, 1]) and the more interesting fact that **fixing it made the
+engine worse**, from -249 to -330 Elo. The constraint was never the activation; it was
+153,372 training samples for 197,000 parameters.
+
+The NNUE inference itself ships and is tested. A net can be loaded with
+`setoption name NetFile value <path>`. None is enabled by default.
 
 These are self-play figures and self-play inflates, since two builds of the same
 engine share every blind spot. Roughly 60% typically transfers.
