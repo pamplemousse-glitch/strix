@@ -189,3 +189,60 @@ the transposition table alone managed 1.5x. Two independent methods, same orderi
 These are **self-play** numbers. Rustic's documentation reports roughly 60% of
 self-play gains transfer to play against other engines, so treat them as upper
 bounds.
+
+## 2026-09-16: Texel tuning, and the error going down while the engine got worse
+
+**Magic bitboards first.** +31% nodes per second, node counts byte-identical. The
+test checks 256,000 random **full-board** occupancies, not subsets of the relevant
+mask: the tables are built from mask subsets, so testing only those would be
+circular and would never catch a wrong mask. ADR 0002.
+
+**Then the tuner shipped a worse evaluation and said it was better.**
+
+First full run: 198,014 positions, 12 passes, training error down 5.1% from
+0.08898 to 0.08440. Every number said it worked.
+
+The tuned knight table:
+
+```
+-114,   32,  -54,   66,   18,  -14,  -96, -130,
+ -72,   68,   40,  -16,  -64,   72,    4,   -8,
+  66,   96,  -62,   71,   -9,    2,   88,  -54,
+```
+
+That is not chess. +96 on b6 sits beside -62 on c6. The pawn table scored a pawn
+on g7, one square from promoting, at -14.
+
+**Only the readable output caught it.** Emitting pasteable Java rather than a
+binary blob was a throwaway decision made for convenience, and it is the sole
+reason this was visible. A blob would have produced the identical numbers and
+shipped.
+
+**The cause is that positions inside a game are not independent.** 198,014
+positions came from 6,000 games, so ~33 positions share each result label, each
+pawn structure, each set of pieces. The effective sample size is nearer 6,000 than
+198,000, which is about 13 independent samples for each of 453 parameters.
+Coordinate descent will cheerfully spend a dozen passes fitting individual squares
+to the quirks of individual games.
+
+**The fix is a holdout, split by GAME rather than by position.** Splitting by
+position would scatter near-duplicates across both sets and report no overfitting
+at all.
+
+It found the turn immediately:
+
+| pass | train | validate | |
+|---|---|---|---|
+| 1 | 0.08706 | 0.08823 | both improving |
+| 2 | 0.08606 | **0.08845** | **training better, held-out worse** |
+
+Overfitting starts at pass two. The first run did twelve.
+
+Stopping at pass one produces a knight table that is a clean symmetric bowl,
+corners at -58, centre at +23, and material of 100/312/322/492/908.
+
+**The lesson is the same one this project keeps relearning in new costumes:** a
+metric improving is not the thing you wanted improving. Alpha-beta pruned plenty
+while returning garbage. The node-count test passed on a broken search. Training
+error fell while the evaluation degraded. Every time, the only thing that caught it
+was a second, independent measurement that the optimisation could not influence.
