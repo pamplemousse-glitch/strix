@@ -53,8 +53,11 @@ public final class SearchLimits {
         long inc = (sideToMove == Piece.WHITE) ? winc : binc;
         if (remaining < 0) return Long.MAX_VALUE;
 
-        long budget = remaining / 20 + inc / 2;
+        // remaining/20 was too greedy for blitz: at 5+3 with 280s left it allocated
+        // 14 seconds and then spent all of them, including on forced recaptures.
+        // A game is 40 moves more often than 20.
+        long budget = remaining / 30 + inc / 2;
         // Never burn the whole clock on one move, and always leave a safety margin.
-        return Math.max(1, Math.min(budget, remaining - 50));
+        return Math.max(1, Math.min(budget, remaining - 100));
     }
 }

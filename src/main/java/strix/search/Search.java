@@ -18,6 +18,9 @@ import strix.eval.Evaluator;
  */
 public final class Search {
 
+    /** Iterations the best move must survive unchanged before we stop early. */
+    private static final int STABLE_ENOUGH = 4;
+
     public static final int MATE = 30_000;
     public static final int INFINITY = 31_000;
     private static final int MAX_PLY = 64;
@@ -80,8 +83,18 @@ public final class Search {
 
         if (ordering != null) ordering.clear();
 
+        // One legal move is not a decision. Play it and keep the clock.
+        int[] rootMoves = moveBuf[0];
+        int rootCount = MoveGen.generateLegal(board, rootMoves, scratch[0]);
+        if (rootCount == 1) {
+            bestMove = rootMoves[0];
+            listener.onDepth(1, 0, 1, 0, bestMove);
+            return 0;
+        }
+
         int completedMove = Move.NONE;
         int completedScore = 0;
+        int stableFor = 0;
 
         for (int depth = 1; depth <= limits.depth && depth < MAX_PLY; depth++) {
             nodes = 0;
@@ -90,15 +103,24 @@ public final class Search {
 
             if (stopped) break;                      // discard the partial result
 
+            stableFor = (bestMove == completedMove) ? stableFor + 1 : 0;
             completedMove = bestMove;
             completedScore = score;
             listener.onDepth(depth, score, nodes, System.currentTimeMillis() - start, completedMove);
 
+            // The answer stopped changing several iterations ago. Searching deeper
+            // is unlikely to change it, and the clock is worth more elsewhere. This
+            // is what makes an obvious recapture instant instead of a full think.
+            if (stableFor >= STABLE_ENOUGH && depth >= 6) break;
+
             // No point starting an iteration we cannot possibly finish. The next
             // one costs several times this one, so half the budget is the cutoff.
+            // Soft limit: do not START an iteration that cannot finish. The next
+            // one costs several times this one, so a third of the budget is the
+            // point of no return. The hard limit still aborts mid-iteration.
             if (byNodes) {
-                if (nodesThisMove > nodeLimit / 2) break;
-            } else if (System.currentTimeMillis() - start > budget / 2) {
+                if (nodesThisMove > nodeLimit / 3) break;
+            } else if (System.currentTimeMillis() - start > budget / 3) {
                 break;
             }
             if (Math.abs(score) > MATE - MAX_PLY) break;   // forced mate found

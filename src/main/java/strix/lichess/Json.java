@@ -12,14 +12,26 @@ final class Json {
 
     private Json() {}
 
+    /**
+     * The value of a STRING field, or null if the field is absent or holds
+     * something else.
+     *
+     * The "or holds something else" is load-bearing. An earlier version skipped
+     * ahead to the next quote after the colon, so on {@code "id":20,"name":"started"}
+     * it sailed past the number and returned "started". That turned a game id into
+     * the literal string "name" and produced a 404 on the game stream.
+     */
     static String string(String json, String key) {
         if (json == null) return null;
         int i = json.indexOf("\"" + key + "\"");
         if (i < 0) return null;
         int colon = json.indexOf(':', i);
         if (colon < 0) return null;
-        int q = json.indexOf('"', colon);
-        if (q < 0) return null;
+
+        int q = colon + 1;
+        while (q < json.length() && Character.isWhitespace(json.charAt(q))) q++;
+        if (q >= json.length() || json.charAt(q) != '"') return null;   // not a string
+
         int end = q + 1;
         StringBuilder sb = new StringBuilder();
         while (end < json.length()) {

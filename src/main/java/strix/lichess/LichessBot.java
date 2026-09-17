@@ -32,8 +32,18 @@ public final class LichessBot {
     private static final String API = "https://lichess.org";
 
     private final String token;
+    /**
+     * HTTP/1.1 is forced deliberately. Java's HttpClient negotiates HTTP/2 by
+     * default, and a long-lived streaming response over a pooled HTTP/2
+     * connection can leave a later send() hanging indefinitely after the first
+     * connection dies. Observed directly: the event stream dropped once with
+     * "closed" and the reconnect never surfaced again, while the identical
+     * request over curl worked every time.
+     */
     private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10)).build();
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
     private final ExecutorService games = Executors.newCachedThreadPool();
     private volatile String username = "?";
 
@@ -65,15 +75,49 @@ public final class LichessBot {
         var acct = http.send(request("/api/account").build(), HttpResponse.BodyHandlers.ofString());
         username = Json.string(acct.body(), "username");
         System.out.println("playing as " + username + "  (https://lichess.org/@/" + username + ")");
+        rejoinOngoing();
         System.out.println("waiting for challenges...");
 
+        // Lichess replays pending challenges to a freshly connected stream, so a
+        // reconnect never loses one. It also closes the stream routinely, which is
+        // why a clean end is logged the same as an error and simply reconnected.
+        int attempt = 0;
         while (true) {
             try {
+                attempt++;
                 stream("/api/stream/event", this::onEvent);
+                System.out.println("event stream ended cleanly, reconnecting (attempt " + attempt + ")");
             } catch (Exception e) {
-                System.err.println("event stream dropped: " + e.getMessage() + ", reconnecting in 5s");
-                Thread.sleep(5_000);
+                System.out.println("event stream error: " + e.getMessage()
+                        + ", reconnecting (attempt " + attempt + ")");
             }
+            Thread.sleep(2_000);
+        }
+    }
+
+    /**
+     * Rejoin anything already in progress.
+     *
+     * The event stream only announces games as they START, so a restart would
+     * otherwise abandon a live game on the clock. Losing on time because the
+     * process bounced is not a chess result.
+     */
+    private void rejoinOngoing() {
+        try {
+            var resp = http.send(request("/api/account/playing").build(),
+                    HttpResponse.BodyHandlers.ofString());
+            String body = resp.body();
+            int i = 0;
+            while ((i = body.indexOf("\"gameId\"", i)) >= 0) {
+                String id = Json.string(body.substring(i), "gameId");
+                i += 8;
+                if (id == null) continue;
+                System.out.println("rejoining game in progress: https://lichess.org/" + id);
+                final String gid = id;
+                games.submit(() -> playGame(gid));
+            }
+        } catch (Exception e) {
+            System.err.println("could not check for games in progress: " + e.getMessage());
         }
     }
 
@@ -94,8 +138,11 @@ public final class LichessBot {
         String type = Json.string(json, "type");
         switch (type) {
             case "challenge" -> {
-                String id = Json.string(json, "id");
-                String variant = Json.nested(json, "variant", "key");
+                // The id must come from inside the challenge object. Searching the
+                // whole message would also match the challenger's id.
+                String id = Json.nested(json, "challenge", "id");
+                String challenge = Json.object(json, "challenge");
+                String variant = Json.nested(challenge, "variant", "key");
                 boolean standard = variant == null || variant.equals("standard");
                 if (standard) {
                     System.out.println("accepting challenge " + id);
@@ -106,11 +153,13 @@ public final class LichessBot {
                 }
             }
             case "gameStart" -> {
-                String id = Json.nested(json, "game", "id");
+                // gameId, not id: the game object also carries fullId, a nested
+                // status.id and a nested opponent.id.
+                String id = Json.nested(json, "game", "gameId");
                 System.out.println("game started: https://lichess.org/" + id);
                 games.submit(() -> playGame(id));
             }
-            case "gameFinish" -> System.out.println("game finished: " + Json.nested(json, "game", "id"));
+            case "gameFinish" -> System.out.println("game finished: " + Json.nested(json, "game", "gameId"));
             default -> { }
         }
     }
