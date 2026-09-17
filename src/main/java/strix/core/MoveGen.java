@@ -130,9 +130,9 @@ public final class MoveGen {
             int sq = Long.numberOfTrailingZeros(from);
             from &= from - 1;
             long attacks = switch (type) {
-                case Piece.BISHOP -> Attacks.bishop(sq, b.occupied);
-                case Piece.ROOK   -> Attacks.rook(sq, b.occupied);
-                default           -> Attacks.queen(sq, b.occupied);
+                case Piece.BISHOP -> Magic.bishop(sq, b.occupied);
+                case Piece.ROOK   -> Magic.rook(sq, b.occupied);
+                default           -> Magic.queen(sq, b.occupied);
             };
             n = emit(sq, attacks & ~ours, theirs, out, n);
         }

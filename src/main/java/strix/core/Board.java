@@ -91,9 +91,9 @@ public final class Board {
         if ((Attacks.KNIGHT[sq] & pieces(by, Piece.KNIGHT)) != 0L) return true;
         if ((Attacks.KING[sq] & pieces(by, Piece.KING)) != 0L) return true;
         long bishopLike = pieces(by, Piece.BISHOP) | pieces(by, Piece.QUEEN);
-        if ((Attacks.bishop(sq, occupied) & bishopLike) != 0L) return true;
+        if ((Magic.bishop(sq, occupied) & bishopLike) != 0L) return true;
         long rookLike = pieces(by, Piece.ROOK) | pieces(by, Piece.QUEEN);
-        return (Attacks.rook(sq, occupied) & rookLike) != 0L;
+        return (Magic.rook(sq, occupied) & rookLike) != 0L;
     }
 
     public boolean inCheck(int color) {
