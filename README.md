@@ -84,9 +84,16 @@ move, exact GSPRT with the pentanomial pair model:
 | Piece-square tables | +544.7 | 24 |
 | Move ordering | +246.6 | 208 |
 | Transposition table | +33.5 | 770 |
+| Magic bitboards | +31% nps, 0 Elo by design | n/a |
+| **Texel tuning** | **-57.6, rejected** | 560 |
 
 The games column is the interesting one: the smaller the effect, the more evidence
-it takes. A fixed-game harness would have spent the same budget on all three.
+it takes. A fixed-game harness would have spent the same budget on all of them.
+
+**The Texel row is the useful one.** Training error fell, held-out error fell, and the
+tuned tables looked correct. The engine was 57.6 Elo worse. The tuned values are not
+shipped. See [ADR 0013](docs/adr/0013-texel-tuning-rejected.md) for why, and for what
+it implies about where NNUE has to get its training data.
 
 These are self-play figures and self-play inflates, since two builds of the same
 engine share every blind spot. Roughly 60% typically transfers.
