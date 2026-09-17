@@ -53,6 +53,7 @@ public final class Main {
                     out("option name Hash type spin default 64 min 0 max 1024");
                     out("option name Ordering type check default true");
                     out("option name Eval type combo default psqt var psqt var material");
+                    out("option name TuneFile type string default <empty>");
                     out("uciok");
                 }
                 case "setoption" -> { join(); setOption(tok); }
@@ -87,6 +88,14 @@ public final class Main {
             search.tt = (mb <= 0) ? null : new TranspositionTable(mb);
         } else if (k.equalsIgnoreCase("Ordering")) {
             search.ordering = Boolean.parseBoolean(v) ? new Ordering() : null;
+        } else if (k.equalsIgnoreCase("TuneFile")) {
+            // Load Texel-tuned values at runtime so the harness can A/B a tuned
+            // build against an untuned one without two compiles.
+            try {
+                strix.eval.Tunable.loadRaw(java.nio.file.Path.of(v));
+            } catch (Exception e) {
+                System.err.println("could not load " + v + ": " + e.getMessage());
+            }
         } else if (k.equalsIgnoreCase("Eval")) {
             search.setEvaluator(v.equalsIgnoreCase("material") ? new Material() : new Psqt());
         }

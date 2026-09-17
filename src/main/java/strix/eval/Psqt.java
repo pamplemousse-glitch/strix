@@ -22,7 +22,7 @@ import strix.core.Piece;
  */
 public final class Psqt implements Evaluator {
 
-    private static final int[] PAWN = {
+    static final int[] PAWN = {
          0,  0,  0,  0,  0,  0,  0,  0,
         50, 50, 50, 50, 50, 50, 50, 50,
         10, 10, 20, 30, 30, 20, 10, 10,
@@ -32,7 +32,7 @@ public final class Psqt implements Evaluator {
          5, 10, 10,-20,-20, 10, 10,  5,
          0,  0,  0,  0,  0,  0,  0,  0
     };
-    private static final int[] KNIGHT = {
+    static final int[] KNIGHT = {
         -50,-40,-30,-30,-30,-30,-40,-50,
         -40,-20,  0,  0,  0,  0,-20,-40,
         -30,  0, 10, 15, 15, 10,  0,-30,
@@ -42,7 +42,7 @@ public final class Psqt implements Evaluator {
         -40,-20,  0,  5,  5,  0,-20,-40,
         -50,-40,-30,-30,-30,-30,-40,-50
     };
-    private static final int[] BISHOP = {
+    static final int[] BISHOP = {
         -20,-10,-10,-10,-10,-10,-10,-20,
         -10,  0,  0,  0,  0,  0,  0,-10,
         -10,  0,  5, 10, 10,  5,  0,-10,
@@ -52,7 +52,7 @@ public final class Psqt implements Evaluator {
         -10,  5,  0,  0,  0,  0,  5,-10,
         -20,-10,-10,-10,-10,-10,-10,-20
     };
-    private static final int[] ROOK = {
+    static final int[] ROOK = {
          0,  0,  0,  0,  0,  0,  0,  0,
          5, 10, 10, 10, 10, 10, 10,  5,
         -5,  0,  0,  0,  0,  0,  0, -5,
@@ -62,7 +62,7 @@ public final class Psqt implements Evaluator {
         -5,  0,  0,  0,  0,  0,  0, -5,
          0,  0,  0,  5,  5,  0,  0,  0
     };
-    private static final int[] QUEEN = {
+    static final int[] QUEEN = {
         -20,-10,-10, -5, -5,-10,-10,-20,
         -10,  0,  0,  0,  0,  0,  0,-10,
         -10,  0,  5,  5,  5,  5,  0,-10,
@@ -72,7 +72,7 @@ public final class Psqt implements Evaluator {
         -10,  0,  5,  0,  0,  0,  0,-10,
         -20,-10,-10, -5, -5,-10,-10,-20
     };
-    private static final int[] KING_MG = {
+    static final int[] KING_MG = {
         -30,-40,-40,-50,-50,-40,-40,-30,
         -30,-40,-40,-50,-50,-40,-40,-30,
         -30,-40,-40,-50,-50,-40,-40,-30,
@@ -82,7 +82,7 @@ public final class Psqt implements Evaluator {
          20, 20,  0,  0,  0,  0, 20, 20,
          20, 30, 10,  0,  0, 10, 30, 20
     };
-    private static final int[] KING_EG = {
+    static final int[] KING_EG = {
         -50,-40,-30,-20,-20,-30,-40,-50,
         -30,-20,-10,  0,  0,-10,-20,-30,
         -30,-10, 20, 30, 30, 20,-10,-30,
@@ -93,7 +93,7 @@ public final class Psqt implements Evaluator {
         -50,-30,-30,-30,-30,-30,-30,-50
     };
 
-    private static final int[][] TABLES = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING_MG};
+    static final int[][] TABLES = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING_MG};
 
     /** Phase weights. Queens and rooks dominate whether it is still a middlegame. */
     private static final int[] PHASE_WEIGHT = {0, 1, 1, 2, 4, 0};
