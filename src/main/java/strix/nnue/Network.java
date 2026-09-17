@@ -112,6 +112,22 @@ public final class Network {
         return Math.round(sum * SCALE);
     }
 
+    // Accessors for the trainer. Deliberately narrow: the trainer may read every
+    // parameter and adjust it by a delta, and may not reshape anything.
+
+    public float[] featureBias() { return featureBias; }
+    public float outputBias() { return outputBias; }
+    public float outputWeight(int i) { return outputWeights[i]; }
+    public float featureWeight(int f, int h) { return featureWeights[f][h]; }
+
+    /** Add the weights of one active feature into an accumulator. */
+    public void addTo(float[] acc, int feature) { addFeature(acc, feature); }
+
+    public void adjustOutputBias(float delta) { outputBias += delta; }
+    public void adjustOutputWeight(int i, float delta) { outputWeights[i] += delta; }
+    public void adjustFeatureBias(int h, float delta) { featureBias[h] += delta; }
+    public void adjustFeatureWeight(int f, int h, float delta) { featureWeights[f][h] += delta; }
+
     /** Small random weights, for testing the plumbing before any training exists. */
     public static Network random(long seed) {
         Network n = new Network();
