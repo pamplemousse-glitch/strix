@@ -39,6 +39,7 @@ public final class Fen {
         b.epSquare = parts[3].equals("-") ? Square.NONE : Square.fromName(parts[3]);
         b.halfmoveClock = parts.length > 4 ? Integer.parseInt(parts[4]) : 0;
         b.fullmove = parts.length > 5 ? Integer.parseInt(parts[5]) : 1;
+        b.hash = Zobrist.compute(b);
         return b;
     }
 

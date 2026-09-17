@@ -20,6 +20,9 @@ public final class Board {
     public int halfmoveClock;
     public int fullmove;
 
+    /** Maintained incrementally. Must always equal Zobrist.compute(this). */
+    public long hash;
+
     public static final int CASTLE_WK = 1, CASTLE_WQ = 2, CASTLE_BK = 4, CASTLE_BQ = 8;
 
     /**
@@ -40,6 +43,7 @@ public final class Board {
     }
 
     private final int[] undo = new int[1024];
+    private final long[] history = new long[1024];
     private int ply;
 
     public Board() {
@@ -53,6 +57,7 @@ public final class Board {
         byColor[Piece.colorOf(piece)] |= 1L << sq;
         occupied |= 1L << sq;
         mailbox[sq] = piece;
+        hash ^= Zobrist.PIECE[piece][sq];
     }
 
     private void remove(int piece, int sq) {
@@ -61,6 +66,7 @@ public final class Board {
         byColor[Piece.colorOf(piece)] &= mask;
         occupied &= mask;
         mailbox[sq] = Piece.NONE;
+        hash ^= Zobrist.PIECE[piece][sq];
     }
 
     private void relocate(int piece, int from, int to) {
@@ -70,6 +76,7 @@ public final class Board {
         occupied ^= mask;
         mailbox[from] = Piece.NONE;
         mailbox[to] = piece;
+        hash ^= Zobrist.PIECE[piece][from] ^ Zobrist.PIECE[piece][to];
     }
 
     public long pieces(int color, int type) { return bb[Piece.index(color, type)]; }
@@ -84,9 +91,9 @@ public final class Board {
         if ((Attacks.KNIGHT[sq] & pieces(by, Piece.KNIGHT)) != 0L) return true;
         if ((Attacks.KING[sq] & pieces(by, Piece.KING)) != 0L) return true;
         long bishopLike = pieces(by, Piece.BISHOP) | pieces(by, Piece.QUEEN);
-        if ((Attacks.bishop(sq, occupied) & bishopLike) != 0L) return true;
+        if ((Magic.bishop(sq, occupied) & bishopLike) != 0L) return true;
         long rookLike = pieces(by, Piece.ROOK) | pieces(by, Piece.QUEEN);
-        return (Attacks.rook(sq, occupied) & rookLike) != 0L;
+        return (Magic.rook(sq, occupied) & rookLike) != 0L;
     }
 
     public boolean inCheck(int color) {
@@ -118,6 +125,7 @@ public final class Board {
             captured = mailbox[to];
         }
 
+        history[ply] = hash;
         undo[ply++] = packUndo(captured == Piece.NONE ? 0xF : captured,
                 castling, epSquare, halfmoveClock);
 
@@ -143,13 +151,19 @@ public final class Board {
             relocate(Piece.index(us, Piece.ROOK), rank, rank + 3);
         }
 
+        hash ^= Zobrist.CASTLING[castling];
         castling &= CASTLE_MASK[from] & CASTLE_MASK[to];
+        hash ^= Zobrist.CASTLING[castling];
+
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
         epSquare = (flag == Move.DOUBLE_PUSH) ? ((from + to) / 2) : Square.NONE;
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
 
         boolean pawnMove = Piece.typeOf(piece) == Piece.PAWN;
         halfmoveClock = (pawnMove || captured != Piece.NONE) ? 0 : halfmoveClock + 1;
         if (us == Piece.BLACK) fullmove++;
         sideToMove = them;
+        hash ^= Zobrist.SIDE;
     }
 
     public void unmake(int move) {
@@ -162,9 +176,15 @@ public final class Board {
         int them = Piece.other(us);
         if (us == Piece.BLACK) fullmove--;
 
+        hash ^= Zobrist.SIDE;
+
         int u = undo[--ply];
+        hash ^= Zobrist.CASTLING[castling];
         castling = undoCastling(u);
+        hash ^= Zobrist.CASTLING[castling];
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
         epSquare = undoEp(u);
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
         halfmoveClock = undoClock(u);
         int captured = undoCaptured(u);
 
@@ -189,6 +209,55 @@ public final class Board {
         } else if (captured != Piece.NONE) {
             put(captured, to);
         }
+    }
+
+    /**
+     * Has this position occurred {@code times} times already, counting the current one?
+     *
+     * Only positions since the last irreversible move can possibly repeat, because a
+     * capture or a pawn move can never be undone by playing on. The halfmove clock
+     * counts exactly that, so it bounds how far back to look.
+     *
+     * Positions two plies apart are the only candidates, since the side to move has
+     * to match, hence the step of 2.
+     */
+    public boolean isRepetition(int times) {
+        int seen = 1;
+        int limit = Math.min(halfmoveClock, ply);
+        for (int back = 2; back <= limit; back += 2) {
+            if (history[ply - back] == hash && ++seen >= times) return true;
+        }
+        return false;
+    }
+
+    /** 100 plies, not 50 moves. A "move" is one from each side. */
+    public boolean isFiftyMoveDraw() {
+        return halfmoveClock >= 100;
+    }
+
+    /**
+     * Positions where checkmate is impossible for either side no matter how badly
+     * they play: bare kings, king and one minor piece, and king and bishop against
+     * king and bishop on the same colour square.
+     */
+    public boolean isInsufficientMaterial() {
+        if ((bb[Piece.index(Piece.WHITE, Piece.PAWN)] | bb[Piece.index(Piece.BLACK, Piece.PAWN)]) != 0L) return false;
+        if ((bb[Piece.index(Piece.WHITE, Piece.ROOK)] | bb[Piece.index(Piece.BLACK, Piece.ROOK)]) != 0L) return false;
+        if ((bb[Piece.index(Piece.WHITE, Piece.QUEEN)] | bb[Piece.index(Piece.BLACK, Piece.QUEEN)]) != 0L) return false;
+
+        long knights = bb[Piece.index(Piece.WHITE, Piece.KNIGHT)] | bb[Piece.index(Piece.BLACK, Piece.KNIGHT)];
+        long bishops = bb[Piece.index(Piece.WHITE, Piece.BISHOP)] | bb[Piece.index(Piece.BLACK, Piece.BISHOP)];
+        int minors = Long.bitCount(knights) + Long.bitCount(bishops);
+
+        if (minors <= 1) return true;                       // K v K, K+N v K, K+B v K
+        if (minors == 2 && Long.bitCount(bishops) == 2) {
+            // Two bishops on the same colour complex cannot mate.
+            long dark = 0xAA55AA55AA55AA55L;
+            boolean bothDark = (bishops & dark) == bishops;
+            boolean bothLight = (bishops & ~dark) == bishops;
+            return bothDark || bothLight;
+        }
+        return false;
     }
 
     /** ASCII diagram, white at the bottom. For eyeballing during step 1. */

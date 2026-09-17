@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Manage the Lichess bot service.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SVC="gui/$(id -u)/com.strix.bot"
+
+case "${1:-status}" in
+  status)
+    launchctl print "$SVC" 2>/dev/null | grep -E "^\s+(state|pid|last exit)" || echo "not loaded"
+    echo "--- recent ---"
+    tail -5 "$REPO/logs/bot.log" 2>/dev/null || echo "(no log yet)"
+    ;;
+  logs)    tail -f "$REPO/logs/bot.log" ;;
+  errors)  tail -30 "$REPO/logs/bot.err" 2>/dev/null || echo "(none)" ;;
+  start)   launchctl kickstart -k "$SVC" && echo started ;;
+  stop)    launchctl bootout "$SVC" 2>/dev/null && echo stopped || echo "was not running" ;;
+  restart) ( cd "$REPO" && ./gradlew -q jar ) && launchctl kickstart -k "$SVC" && echo restarted ;;
+  *)       echo "usage: ops/bot {status|logs|errors|start|stop|restart}" ;;
+esac

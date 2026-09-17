@@ -31,6 +31,21 @@ public final class MoveGen {
         return count;
     }
 
+    /**
+     * Legal captures and promotions only, for quiescence search. Filters the full
+     * generation rather than generating captures directly, which is slower but
+     * cannot disagree with generateLegal about what is legal.
+     */
+    public static int generateCaptures(Board b, int[] out, int[] scratch) {
+        int n = generateLegal(b, scratch, out);
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            int m = scratch[i];
+            if (Move.isCapture(m) || Move.isPromotion(m)) out[count++] = m;
+        }
+        return count;
+    }
+
     public static int generatePseudoLegal(Board b, int[] out) {
         int n = 0;
         int us = b.sideToMove;
@@ -115,9 +130,9 @@ public final class MoveGen {
             int sq = Long.numberOfTrailingZeros(from);
             from &= from - 1;
             long attacks = switch (type) {
-                case Piece.BISHOP -> Attacks.bishop(sq, b.occupied);
-                case Piece.ROOK   -> Attacks.rook(sq, b.occupied);
-                default           -> Attacks.queen(sq, b.occupied);
+                case Piece.BISHOP -> Magic.bishop(sq, b.occupied);
+                case Piece.ROOK   -> Magic.rook(sq, b.occupied);
+                default           -> Magic.queen(sq, b.occupied);
             };
             n = emit(sq, attacks & ~ours, theirs, out, n);
         }

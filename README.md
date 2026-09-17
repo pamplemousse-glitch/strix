@@ -64,8 +64,58 @@ startpos depth 5   4,865,609
 kiwipete depth 4   4,085,603
 ```
 
-**Strength.** [UNMEASURED] Runs as a labeled BOT on Lichess. Rating and full game history
-are public.
+**Pruning, measured.** Nodes to reach depth 6 from the starting position:
+
+| configuration | nodes | speedup |
+|---|---|---|
+| bare alpha-beta | 3,500,451 | 1.0x |
+| + transposition table | 2,384,099 | 1.5x |
+| + move ordering | 126,390 | 27.7x |
+| + both | 89,109 | 39.3x |
+
+The table alone is worth 1.5x. Move ordering is worth 27.7x. The transposition table's real
+contribution is supplying a good first move to try, not its cutoffs.
+
+**What each feature is worth, measured.** Self-play SPRT at fixed 20,000 nodes per
+move, exact GSPRT with the pentanomial pair model:
+
+| Feature removed | Elo | Games to settle |
+|---|---|---|
+| Piece-square tables | +544.7 | 24 |
+| Move ordering | +246.6 | 208 |
+| Transposition table | +33.5 | 770 |
+| Magic bitboards | +31% nps, 0 Elo by design | n/a |
+| **Texel tuning** | **-57.6, rejected** | 560 |
+| **NNUE** | **-330.5, rejected** | 104 |
+
+The games column is the interesting one: the smaller the effect, the more evidence
+it takes. A fixed-game harness would have spent the same budget on all of them.
+
+**The two rejected rows are the useful ones.** In both cases every proxy metric improved
+and the engine got worse, and the only thing that disagreed was several hundred games of
+chess. Neither change is shipped.
+
+[ADR 0013](docs/adr/0013-texel-tuning-rejected.md) covers Texel tuning.
+[ADR 0014](docs/adr/0014-nnue-rejected.md) covers NNUE, including a real bug found along
+the way (254 of 256 hidden units dead, because the accumulator spanned [-15, 9] against a
+clipped ReLU window of [0, 1]) and the more interesting fact that **fixing it made the
+engine worse**, from -249 to -330 Elo. The constraint was never the activation; it was
+153,372 training samples for 197,000 parameters.
+
+The NNUE inference itself ships and is tested. A net can be loaded with
+`setoption name NetFile value <path>`. None is enabled by default.
+
+These are self-play figures and self-play inflates, since two builds of the same
+engine share every blind spot. Roughly 60% typically transfers.
+
+Reproduce any row:
+
+```bash
+./gradlew build
+java -cp build/classes/java/main strix.harness.Main 4 20000 1200 runs/x.tsv "Ordering=false" 100
+```
+
+**Strength.** [UNMEASURED] Will run as a labeled BOT on Lichess.
 
 Neither claim asks you to trust the author.
 
@@ -80,9 +130,18 @@ To play against it, point any UCI GUI (Cute Chess, Arena, BanksiaGUI) at the bui
 
 ## Key design decisions
 
-Each links to an ADR recording what else was considered and what the choice cost.
+Each ADR records what else was considered and what the choice cost.
 
-[UNMEASURED] Populated as the decisions are made. See `docs/adr/`.
+- [0001](docs/adr/0001-bitboards-over-mailbox.md) Bitboards over a mailbox array
+- [0003](docs/adr/0003-pseudo-legal-generation.md) Pseudo-legal generation with a legality filter
+- [0004](docs/adr/0004-make-unmake-and-packed-moves.md) Make/unmake in place, moves packed into an int
+- [0005](docs/adr/0005-alpha-beta-not-pvs.md) Alpha-beta, and why negamax is kept forever
+- [0006](docs/adr/0006-quiescence-is-mandatory.md) Quiescence search
+- [0007](docs/adr/0007-transposition-table.md) Transposition table
+- [0008](docs/adr/0008-move-ordering.md) Move ordering
+
+`docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
+injection that a node-count test happily passed.
 
 ## What this is NOT
 

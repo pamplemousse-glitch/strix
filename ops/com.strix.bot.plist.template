@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for the Lichess bot.
+
+  Install with ops/install-bot-service.sh, which substitutes the absolute paths
+  launchd requires. launchd runs with essentially no environment, so java must be
+  named by full path and the working directory must be set explicitly.
+
+  KeepAlive restarts the process if it dies. That matters more than it sounds:
+  the engine abandoning a live game on the clock is a loss, and the client
+  rejoins games in progress on startup precisely so a restart costs nothing.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.strix.bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@JAVA@</string>
+        <string>-Xmx512m</string>
+        <string>-cp</string>
+        <string>@REPO@/build/libs/strix-0.1.0.jar</string>
+        <string>strix.lichess.LichessBot</string>
+        <string>@REPO@/.lichess-token</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO@</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>@REPO@/logs/bot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@REPO@/logs/bot.err</string>
+</dict>
+</plist>
