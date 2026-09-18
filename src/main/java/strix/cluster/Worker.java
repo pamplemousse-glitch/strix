@@ -41,11 +41,21 @@ public final class Worker implements AutoCloseable {
     private final long timeoutMillis;
     private final int maxPlies;
 
+    private final long giveUpMillis;
+
     private UciEngine a, b;
     private int played, dropped;
 
     public Worker(String id, String baseUrl, EngineSpec engineA, EngineSpec engineB,
                   String goArgs, long timeoutMillis, int maxPlies) {
+        this(id, baseUrl, engineA, engineB, goArgs, timeoutMillis, maxPlies, DEFAULT_GIVE_UP_MILLIS);
+    }
+
+    /** {@code giveUpMillis} is a parameter so the retry ceiling is testable in
+     *  seconds rather than in the quarter of an hour a real worker waits. */
+    Worker(String id, String baseUrl, EngineSpec engineA, EngineSpec engineB,
+           String goArgs, long timeoutMillis, int maxPlies, long giveUpMillis) {
+        this.giveUpMillis = giveUpMillis;
         this.id = id;
         this.base = URI.create(baseUrl);
         this.engineA = engineA;
@@ -105,6 +115,9 @@ public final class Worker implements AutoCloseable {
     }
 
     private static final long RETRY_MILLIS = 2_000;
+    private static final long FIRST_RETRY_MILLIS = 1_000;
+    private static final long MAX_RETRY_MILLIS = 30_000;
+    private static final long DEFAULT_GIVE_UP_MILLIS = 15 * 60 * 1_000L;
 
     /**
      * A lease response, with the two empty cases kept distinct.
@@ -113,23 +126,56 @@ public final class Worker implements AutoCloseable {
      * were both a null body, it took one careless equality check to make a worker
      * quit while another worker's jobs were still waiting to be reclaimed.
      */
-    private record Reply(int status, String body) {
+    record Reply(int status, String body) {
         boolean retryLater() { return status == 503; }
         boolean over()       { return status == 204; }
     }
 
-    private Reply get(String path) throws IOException, InterruptedException {
-        HttpResponse<String> r = http.send(
-                HttpRequest.newBuilder(base.resolve(path)).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
-        return new Reply(r.statusCode(), r.body());
+    Reply get(String path) throws IOException, InterruptedException {
+        return send(HttpRequest.newBuilder(base.resolve(path)).GET().build(), "GET " + path);
     }
 
     private String post(String path, String body) throws IOException, InterruptedException {
-        return http.send(
-                HttpRequest.newBuilder(base.resolve(path))
-                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
-                HttpResponse.BodyHandlers.ofString()).body();
+        return send(HttpRequest.newBuilder(base.resolve(path))
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), "POST " + path).body();
+    }
+
+    /**
+     * Sends, retrying through transient network failure with exponential backoff.
+     *
+     * Without this a worker dies on the first dropped packet, which over a long run
+     * is not an edge case but a certainty: wifi drops, the coordinator gets
+     * restarted, a laptop's interface cycles. A run left going overnight would find
+     * every worker dead by morning and the coordinator patiently holding leases for
+     * machines that stopped existing hours ago.
+     *
+     * <p>Retrying a {@code /result} POST is safe for a reason that already exists:
+     * the coordinator deduplicates by job key, because lease expiry made duplicate
+     * submissions certain. At-least-once delivery from a retrying worker lands in
+     * exactly the same path. The dedupe was not built for this and covers it anyway.
+     *
+     * <p>Giving up after {@link #GIVE_UP_MILLIS} is deliberate. A worker that cannot
+     * reach the coordinator for that long is not in a blip, and a process that exits
+     * is easier to notice and restart than one looping silently forever.
+     */
+    private Reply send(HttpRequest request, String what) throws IOException, InterruptedException {
+        long delay = FIRST_RETRY_MILLIS;
+        long waited = 0;
+        IOException last = null;
+
+        while (waited < giveUpMillis) {
+            try {
+                HttpResponse<String> r = http.send(request, HttpResponse.BodyHandlers.ofString());
+                if (waited > 0) System.out.printf("%s: %s recovered after %ds%n", id, what, waited / 1000);
+                return new Reply(r.statusCode(), r.body());
+            } catch (IOException e) {
+                last = e;
+                Thread.sleep(delay);
+                waited += delay;
+                delay = Math.min(delay * 2, MAX_RETRY_MILLIS);
+            }
+        }
+        throw new IOException(what + " unreachable for " + (giveUpMillis / 1000) + "s", last);
     }
 
     private static Map<String, String> parse(String body) {
