@@ -179,6 +179,56 @@ finished. `ClusterServerTest.anEmptyQueueIsNotTheEndOfTheRun` pins it.
 This distributes **games, not search**. The search itself stays single-threaded and
 deterministic, for the reason given under "What this is NOT".
 
+### Leaving it running overnight
+
+A long run meets failures a short one does not, and most of them are not the
+network. Both machines must be told not to sleep, the coordinator must come back if
+it dies, and both sides must be running the same build.
+
+On the coordinator:
+
+```bash
+caffeinate -i bash -c 'until java -cp build/classes/java/main \
+  strix.cluster.Main coordinator 9000 40000 60 runs/overnight.tsv 5; do sleep 5; done'
+```
+
+`caffeinate -i` blocks idle sleep for as long as the command runs. The `until` loop
+restarts the coordinator if it exits badly, which is safe because startup replays
+`runs/overnight.tsv` and resumes: a crash costs the pairs that were in flight, not
+the ones already on disk.
+
+On each worker machine:
+
+```bash
+caffeinate -i java -cp build/classes/java/main \
+  strix.cluster.Main worker http://<coordinator-host>.local:9000 friend 20000 - -
+```
+
+Use the `.local` hostname rather than a raw address. DHCP leases get renewed
+overnight, and a worker pointed at an address that moved will retry for fifteen
+minutes and then exit.
+
+Workers ride out transient failures on their own: a request that fails retries with
+exponential backoff for up to fifteen minutes before giving up. Retrying a result
+POST is safe for a reason that already existed, which is that the coordinator
+deduplicates by job key. The dedupe was built for lease expiry and covers
+at-least-once delivery from a retrying worker without change.
+
+**Check both machines are on the same commit.** Nothing enforces it yet, and a
+worker on a different build silently mixes two engines into one statistical test.
+That corruption looks exactly like a real result.
+
+```bash
+git rev-parse HEAD        # must match on every machine
+```
+
+In the morning:
+
+```bash
+curl <coordinator-host>.local:9000/status
+wc -l < runs/overnight.tsv
+```
+
 ## Key design decisions
 
 Each ADR records what else was considered and what the choice cost.
