@@ -128,6 +128,53 @@ Neither claim asks you to trust the author.
 
 To play against it, point any UCI GUI (Cute Chess, Arena, BanksiaGUI) at the built jar.
 
+## Running the harness across machines
+
+One laptop can only settle changes big enough to be obvious. SPRT games scale
+roughly as 1/effect², so the transposition table at +33.5 Elo took 770 pairs, but a
++5 Elo change needs about 34,000 — days of a single machine. `strix.cluster` splits
+the games across processes, on one machine or many.
+
+```bash
+java -cp build/classes/java/main strix.cluster.Main coordinator 9000 500 60 runs/cluster.tsv 5
+java -cp build/classes/java/main strix.cluster.Main worker http://<host>:9000 w1 20000 - -
+```
+
+**The hard part is not the fan-out, it is the accounting.** A worker can die
+holding a job, and over a network a dead worker and a slow one look identical:
+silence. Jobs are leased with an expiry and reclaimed when it lapses, which means a
+result can arrive *after* its job was reassigned. The same pair then gets submitted
+twice.
+
+Counting it twice would be invisible. `Sprt.record` cannot tell a repeat from a
+real observation, so a double-counted pair moves the log-likelihood ratio exactly as
+far as a genuine one, and the run stops early on evidence that does not exist. The
+Elo number comes out wrong with nothing to indicate it.
+
+So the append-only log is the source of truth for what has been counted, and a
+duplicate is dropped before it reaches the test. Dropping rather than reconciling
+is only safe because games run at fixed nodes per move ([ADR 0011](docs/adr/0011-nodestime-over-wall-clock.md)):
+two workers computing the same pair produce the identical result, so there is never
+a question of which one is real.
+
+Killing a worker mid-game, 8 pairs, one machine:
+
+```
+counted 0  pending 7  inflight 1   worker holds a lease, then is killed -9
+counted 2  pending 4  inflight 2   a second worker takes over
+counted 6  pending 1  expired 1    the dead lease lapses, its job is reclaimed
+counted 8                          16 games, 1 lease expired, 0 double-counted
+```
+
+Two empty responses are deliberately different. `503` means no job right now,
+`204` means no job ever again. Conflating them is a silent, terminal bug: every
+surviving worker quits the moment a dead worker's jobs are the only ones left, the
+lease expires with nobody there to claim it, and the run ends short while looking
+finished. `ClusterServerTest.anEmptyQueueIsNotTheEndOfTheRun` pins it.
+
+This distributes **games, not search**. The search itself stays single-threaded and
+deterministic, for the reason given under "What this is NOT".
+
 ## Key design decisions
 
 Each ADR records what else was considered and what the choice cost.
@@ -151,7 +198,9 @@ injection that a node-count test happily passed.
 - **Not an opening book or endgame tablebases.** Those improve results without
   demonstrating anything about the search. They are data, not engineering.
 - **Not a parallel search.** Parallel search is nondeterministic, which would break the
-  reproducibility every verification step here depends on.
+  reproducibility every verification step here depends on. `strix.cluster` distributes
+  whole games across workers, which keeps each game deterministic; it does not
+  parallelise the tree.
 - **Not a GUI.** Speaking UCI means it does not need one.
 - **Not a chess variant engine.** Standard chess only.
 
