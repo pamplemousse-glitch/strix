@@ -1,12 +1,13 @@
 # Strix
 
-A UCI chess engine written from scratch in Java, with its correctness proven by exact
-position counts in CI and its strength proven by a public rating on Lichess.
+[![CI](https://github.com/pamplemousse-glitch/strix/actions/workflows/ci.yml/badge.svg)](https://github.com/pamplemousse-glitch/strix/actions/workflows/ci.yml)
 
-> **Status: spec.** No engine code yet. This README was written before the code, on
-> purpose, to force the scope down. Any line below marked `[UNMEASURED]` is a claim that
-> has not been produced yet. **The count of those markers must be zero before this repo is
-> made public.**
+A UCI chess engine written from scratch in Java, with its correctness proven by exact
+position counts in CI and every strength claim settled by several hundred games of
+self-play rather than by opinion.
+
+This README was written before the code, to force the scope down. Every number below is
+reproducible with a command in this repo.
 
 ## The problem
 
@@ -115,7 +116,10 @@ Reproduce any row:
 java -cp build/classes/java/main strix.harness.Main 4 20000 1200 runs/x.tsv "Ordering=false" 100
 ```
 
-**Strength.** [UNMEASURED] Will run as a labeled BOT on Lichess.
+**Strength against outside opposition: not measured.** The Lichess bot client ships
+(`strix.lichess.LichessBot`, runs as a launchd service), but it has not earned a public
+rating yet, so no Elo figure against other engines is claimed anywhere in this repo. The
+self-play numbers above compare Strix to Strix, and are labeled as such.
 
 Neither claim asks you to trust the author.
 
