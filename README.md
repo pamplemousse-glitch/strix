@@ -80,14 +80,44 @@ contribution is supplying a good first move to try, not its cutoffs.
 **What each feature is worth, measured.** Self-play SPRT at fixed 20,000 nodes per
 move, exact GSPRT with the pentanomial pair model:
 
-| Feature removed | Elo | Games to settle |
-|---|---|---|
-| Piece-square tables | +544.7 | 24 |
-| Move ordering | +246.6 | 208 |
-| Transposition table | +33.5 | 770 |
-| Magic bitboards | +31% nps, 0 Elo by design | n/a |
-| **Texel tuning** | **-57.6, rejected** | 560 |
-| **NNUE** | **-330.5, rejected** | 104 |
+| Feature removed | Elo | Games played | Games that were *distinct* |
+|---|---|---|---|
+| Piece-square tables | +544.7 | 24 | 24 |
+| Move ordering | +246.6 | 208 | 96 |
+| Transposition table | +33.5 | 770 | 96 |
+| Magic bitboards | +31% nps, 0 Elo by design | n/a | n/a |
+| **Texel tuning** | **-57.6, rejected** | 560 | 96 |
+| **NNUE** | **-330.5, rejected** | 104 | 96 |
+
+**The fourth column is a correction, and it matters more than the third.**
+
+The harness drew openings as `pairIndex % 48` from a 48-line book, and the search is
+deterministic at a fixed node count. So pair 0 and pair 48 were not similar games,
+they were the *same* game, move for move. `runs/texel-sprt.tsv` holds 280 pairs and
+48 distinct (opening, bucket, result) triples. `runs/hash-tight.tsv` holds 385 and 48.
+
+The LLR is linear in the bucket counts, so replaying a sample k times multiplies it by
+k while adding no information. Past the book size the test crosses a bound with
+probability approaching 1, in whichever direction those 48 games happen to lean, and
+the alpha and beta guarantees are void rather than merely weakened.
+
+**What survives and what does not.** Elo here is a mean-score estimate, and
+replication does not move a mean, so the figures in column two stand. The
+*confidence* does not. The transposition-table row drops from LLR +2.96, past the
+2.94 bound, to roughly +0.36 over the 48 distinct pairs: "keep playing", not "+33.5
+Elo, settled". Only the piece-square-table row, which finished inside the book at 12
+pairs, is untouched.
+
+Fixed in `Openings.lineFor`: past the first cycle the book line is extended by 2, 4 or
+6 random legal plies seeded from the pair index. Still exactly reproducible per pair,
+which is what ADR 0011 and the cluster's duplicate dropping both depend on, but pair 0
+and pair 48 are now different games. Colours swap inside a pair, so the imbalance a
+random ply introduces lands on each engine once and cancels.
+
+These rows have not yet been re-measured under the fix. They are kept with the
+correction attached rather than quietly deleted, because the mistake is the
+interesting part: this repo argues at length that independent samples are games and
+not positions, and its own harness was counting one game up to eight times.
 
 The games column is the interesting one: the smaller the effect, the more evidence
 it takes. A fixed-game harness would have spent the same budget on all of them.
@@ -285,6 +315,7 @@ Each ADR records what else was considered and what the choice cost.
 - [0013](docs/adr/0013-texel-tuning-rejected.md) Texel tuning, measured and rejected
 - [0014](docs/adr/0014-nnue-rejected.md) NNUE, measured and rejected
 - [0015](docs/adr/0015-seek-rated-games.md) The bot challenges, it does not wait
+- [0016](docs/adr/0016-openings-must-not-repeat.md) A replayed game is not a second observation
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.

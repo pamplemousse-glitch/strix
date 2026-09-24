@@ -36,8 +36,14 @@ public final class Fen {
         if (parts[2].indexOf('k') >= 0) b.castling |= Board.CASTLE_BK;
         if (parts[2].indexOf('q') >= 0) b.castling |= Board.CASTLE_BQ;
 
-        b.epSquare = parts[3].equals("-") ? Square.NONE : Square.fromName(parts[3]);
-        b.halfmoveClock = parts.length > 4 ? Integer.parseInt(parts[4]) : 0;
+        // Both fields are validated against the pieces actually on the board. A
+        // FEN is input, and MoveGen trusts castling rights and the ep square
+        // outright: an unchecked one lets it generate a castle with no rook or an
+        // ep capture with no pawn. See Board.validatedCastling / validatedEpSquare.
+        b.castling = b.validatedCastling(b.castling);
+        b.epSquare = b.validatedEpSquare(
+                parts[3].equals("-") ? Square.NONE : Square.fromName(parts[3]));
+        b.halfmoveClock = parts.length > 4 ? Math.max(0, Integer.parseInt(parts[4])) : 0;
         b.fullmove = parts.length > 5 ? Integer.parseInt(parts[5]) : 1;
         b.hash = Zobrist.compute(b);
         return b;

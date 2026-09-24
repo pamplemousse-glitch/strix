@@ -112,7 +112,7 @@ public final class Trainer {
         // Independent samples are games, not positions. Checked before any
         // training happens, because this is the number that decided the outcome
         // of both previous attempts and it costs nothing to look at.
-        checkRatio(split.trainGames().size(), force);
+        checkRatio(split, force);
         System.out.println();
 
         if (wantCurve) {
@@ -346,7 +346,7 @@ public final class Trainer {
      * loss, the best ever recorded here, at -249 Elo. See ADR 0014.
      */
     /** Training set kept as whole games, plus the flat holdout. */
-    record Split(List<List<Sample>> trainGames, List<Sample> validate) {
+    record Split(List<List<Sample>> trainGames, List<Sample> validate, int untagged) {
         List<Sample> train() {
             List<Sample> flat = new ArrayList<>();
             for (List<Sample> g : trainGames) flat.addAll(g);
@@ -365,13 +365,6 @@ public final class Trainer {
             byGame.computeIfAbsent(key, k -> new ArrayList<>()).add(t.sample());
         }
 
-        if (untagged > 0) {
-            System.out.printf(
-                    "WARNING: %,d of %,d rows carry no game id, so the holdout for those%n"
-                  + "         is by position. Regenerate with SelfPlay to get a game-wise%n"
-                  + "         split; see Dataset and ADR 0014.%n", untagged, all.size());
-        }
-
         List<List<Sample>> games = new ArrayList<>(byGame.values());
         java.util.Collections.shuffle(games, new java.util.Random(12345));
 
@@ -385,7 +378,7 @@ public final class Trainer {
         }
         System.out.printf("%,d games -> train %,d positions in %,d games   validate %,d%n",
                 games.size(), positions, trainGames.size(), validate.size());
-        return new Split(trainGames, validate);
+        return new Split(trainGames, validate, untagged);
     }
 
     /**
@@ -403,8 +396,29 @@ public final class Trainer {
      * 10x is the floor and 100x is comfortable. Real NNUE training sits in that
      * range, on hundreds of millions of positions.
      */
-    private static void checkRatio(int independentSamples, boolean force) {
+    private static void checkRatio(Split split, boolean force) {
         int params = Network.parameterCount();
+
+        // An untagged row gets its own synthetic key above, so it counts as a
+        // one-position "game". Feeding that count to the ratio check turns a
+        // count of POSITIONS into a claimed count of independent samples, and
+        // overstates independence by about 33x: exactly the error this guardrail
+        // exists to catch. If any row lacks a game id, independence is unknown
+        // and the honest answer is to refuse rather than to guess.
+        if (split.untagged() > 0) {
+            System.out.printf("%n%,d rows carry no game id, so independent samples cannot be%n",
+                    split.untagged());
+            System.out.printf("counted. Positions from one game are not independent: 198,014%n");
+            System.out.printf("positions from 6,000 games is about 6,000 samples, not 198,014.%n%n");
+            System.out.printf("Regenerate with SelfPlay, which writes the id. See Dataset.%n");
+            if (!force) {
+                System.out.printf("%nREFUSING TO TRAIN. Pass --force to train anyway.%n");
+                System.exit(2);
+            }
+            System.out.printf("%nForced, and the ratio below is meaningless.%n");
+        }
+
+        int independentSamples = split.trainGames().size();
         double ratio = independentSamples / (double) params;
         // Small ratios are the interesting ones and %.2f rounds them all to
         // "0.00x", which hides the difference between 0.8 and 0.0004.

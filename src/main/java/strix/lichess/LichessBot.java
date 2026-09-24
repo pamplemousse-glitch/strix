@@ -171,11 +171,29 @@ public final class LichessBot {
             try {
                 var resp = http.send(request(path).POST(HttpRequest.BodyPublishers.noBody()).build(),
                         HttpResponse.BodyHandlers.ofString());
-                if (resp.statusCode() == 200) return true;
-                // A 400 here usually means the move already landed and it is no
-                // longer our turn, which is success as far as the game goes.
-                System.out.println("move " + uci + " -> " + resp.statusCode()
-                        + " " + summarise(resp.body()));
+                int code = resp.statusCode();
+                if (code == 200) return true;
+
+                // 429 and 5xx are the server saying "not now", and the first
+                // version returned on them. That is the same wedge as a dropped
+                // connection: the move never lands, the position never changes,
+                // no gameState arrives, and the game thread waits out the clock.
+                if (code == 429 || code >= 500) {
+                    System.err.println("move " + uci + " -> " + code + ", retrying");
+                    if (attempt < 3) {
+                        Thread.sleep(code == 429 ? 2_000L : 500L * attempt);
+                        continue;
+                    }
+                    break;
+                }
+
+                // A 400 usually means the move already landed and it is no longer
+                // our turn, which is success as far as the game goes. Retrying
+                // would not help either way.
+                System.out.println("move " + uci + " -> " + code + " " + summarise(resp.body()));
+                return false;
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
                 return false;
             } catch (Exception e) {
                 System.err.println("move " + uci + " attempt " + attempt + " failed: " + e.getMessage());
@@ -476,6 +494,27 @@ public final class LichessBot {
 
                 String variant = Json.nested(challenge, "variant", "key");
                 boolean standard = variant == null || variant.equals("standard");
+
+                // Accepting ignored maxGames entirely, so being challenged during
+                // a game gave two games sharing one core. That is exactly the
+                // contention the maxGames doc says invalidates a rating.
+                if (standard && ongoingGames() >= maxGames) {
+                    System.out.println("declining " + id + ": already at capacity");
+                    post("/api/challenge/" + id + "/decline");
+                    return;
+                }
+
+                // A correspondence or unlimited challenge has no clock, and the
+                // 60-second fallback in playGame would then invent one and hand
+                // the search a budget that has nothing to do with the real game.
+                String speed = Json.string(challenge, "speed");
+                if (standard && speed != null
+                        && (speed.equals("correspondence") || speed.equals("unlimited"))) {
+                    System.out.println("declining " + id + ": " + speed + ", no real clock");
+                    post("/api/challenge/" + id + "/decline");
+                    return;
+                }
+
                 if (standard) {
                     System.out.println("accepting challenge " + id);
                     post("/api/challenge/" + id + "/accept");
@@ -519,7 +558,55 @@ public final class LichessBot {
         final boolean[] weAreWhite = new boolean[1];
         final boolean[] known = new boolean[1];
 
+        // Reconnects for as long as Lichess still says the game is live.
+        //
+        // This used to call stream() once. Any drop on the game stream (a TCP
+        // reset, a server rotation, the same class of failure the HTTP/1.1 pin
+        // and the postMove retry both exist for) ran the finally, forgot the
+        // game, and left it to flag. Nothing re-announced it: rejoinOngoing runs
+        // only at startup and the event stream announces a game once, at
+        // gameStart. Worse, ongoingGames() still counted it, so the seek loop
+        // stayed parked at capacity. No new games, no error, healthy process.
         try {
+            int failures = 0;
+            while (true) {
+                try {
+                    streamGame(gameId, search, weAreWhite, known);
+                    failures = 0;
+                } catch (Exception e) {
+                    System.err.println("game " + gameId + " stream: " + e.getMessage());
+                    failures++;
+                }
+                if (!stillPlaying(gameId)) break;
+                if (failures > 20) {
+                    System.err.println("GIVING UP on " + gameId + " after " + failures + " stream failures");
+                    break;
+                }
+                Thread.sleep(Math.min(5_000L, 500L * Math.max(1, failures)));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            playing.remove(gameId);
+        }
+    }
+
+    /** True while Lichess still lists this game as ours and in progress. */
+    private boolean stillPlaying(String gameId) {
+        try {
+            var resp = http.send(request("/api/account/playing").build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return resp.statusCode() == 200 && resp.body() != null && resp.body().contains(gameId);
+        } catch (Exception e) {
+            // Assume it is still live: reconnecting to a finished game is a
+            // wasted request, dropping a live one loses it on the clock.
+            return true;
+        }
+    }
+
+    private void streamGame(String gameId, Search search, boolean[] weAreWhite, boolean[] known)
+            throws Exception {
+        {
             stream("/api/bot/game/stream/" + gameId, json -> {
                 String type = Json.string(json, "type");
                 String moves, state = json;
@@ -553,7 +640,13 @@ public final class LichessBot {
                 for (String u : moves.trim().split("\\s+")) {
                     if (u.isEmpty()) continue;
                     int m = resolve(board, u);
-                    if (m == Move.NONE) return;
+                    if (m == Move.NONE) {
+                        // Every gameState replays the whole move list, so one
+                        // unresolvable move silences this game permanently. It
+                        // used to do that without printing anything.
+                        System.err.println("game " + gameId + ": cannot resolve move '" + u + "'");
+                        return;
+                    }
                     board.make(m);
                 }
 
@@ -565,10 +658,6 @@ public final class LichessBot {
                 if (search.bestMove == Move.NONE) return;
                 postMove(gameId, Move.toUci(search.bestMove));
             });
-        } catch (Exception e) {
-            System.err.println("game " + gameId + " stream ended: " + e.getMessage());
-        } finally {
-            playing.remove(gameId);
         }
     }
 

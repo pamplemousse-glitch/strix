@@ -88,8 +88,12 @@ public final class Worker implements AutoCloseable {
 
             Map<String, String> job = parse(lease.body());
             String key = job.get("key");
-            int openingIndex = Integer.parseInt(job.get("opening"));
-            String opening = Openings.get(openingIndex);
+            // By pair index, not book index: past the end of the book the line is
+            // extended with plies seeded from the pair, so pair 0 and pair 48 are
+            // no longer the identical game. Still deterministic per pair, which is
+            // what the coordinator's duplicate dropping relies on. See Openings.
+            int pairIndex = Integer.parseInt(job.get("pair"));
+            String opening = Openings.lineFor(pairIndex);
 
             // Same opening, both colours, so the opening's own advantage cancels.
             Game.Outcome first = Game.play(a, b, opening, goArgs, timeoutMillis, maxPlies);

@@ -45,6 +45,13 @@ public final class Main {
             line = line.trim();
             if (line.isEmpty()) continue;
             String[] tok = line.split("\\s+");
+            // The UCI spec requires ignoring anything not understood, and a GUI
+            // sends plenty. Without this, three ordinary malformed inputs killed
+            // the process outright: "go wtime" (index past the end),
+            // "position fen not-a-fen" (IllegalArgumentException out of
+            // Fen.parse), and "setoption name Hash value abc"
+            // (NumberFormatException). An engine that exits mid-match loses it.
+            try {
             switch (tok[0]) {
                 case "uci" -> {
                     out("id name " + NAME);
@@ -59,12 +66,22 @@ public final class Main {
                 }
                 case "setoption" -> { join(); setOption(tok); }
                 case "isready" -> { join(); out("readyok"); }
-                case "ucinewgame" -> { join(); board = Fen.parse(Fen.START); tt.clear(); }
+                // search.tt, not tt: setOption replaces the table when Hash
+                // changes, and clearing the original left the live one holding
+                // entries from the previous game.
+                case "ucinewgame" -> {
+                    join();
+                    board = Fen.parse(Fen.START);
+                    if (search.tt != null) search.tt.clear();
+                }
                 case "position" -> { join(); position(tok); }
                 case "go" -> go(tok);
                 case "stop" -> { search.stop(); join(); }
                 case "quit" -> { search.stop(); join(); return; }
                 default -> { /* UCI says ignore unknown commands */ }
+            }
+            } catch (RuntimeException e) {
+                System.err.println("ignoring \"" + line + "\": " + e);
             }
         }
     }
@@ -144,14 +161,17 @@ public final class Main {
         join();
         SearchLimits limits = new SearchLimits();
         for (int i = 1; i < tok.length; i++) {
+            // Every one of these consumes the NEXT token, so a trailing keyword
+            // ("go wtime") walked off the end and took the process with it.
+            boolean hasValue = i + 1 < tok.length;
             switch (tok[i]) {
-                case "wtime" -> limits.wtime = Long.parseLong(tok[++i]);
-                case "btime" -> limits.btime = Long.parseLong(tok[++i]);
-                case "winc" -> limits.winc = Long.parseLong(tok[++i]);
-                case "binc" -> limits.binc = Long.parseLong(tok[++i]);
-                case "movetime" -> limits.movetime = Long.parseLong(tok[++i]);
-                case "nodes" -> limits.nodes = Long.parseLong(tok[++i]);
-                case "depth" -> limits.depth = Integer.parseInt(tok[++i]);
+                case "wtime" -> { if (hasValue) limits.wtime = Long.parseLong(tok[++i]); }
+                case "btime" -> { if (hasValue) limits.btime = Long.parseLong(tok[++i]); }
+                case "winc" -> { if (hasValue) limits.winc = Long.parseLong(tok[++i]); }
+                case "binc" -> { if (hasValue) limits.binc = Long.parseLong(tok[++i]); }
+                case "movetime" -> { if (hasValue) limits.movetime = Long.parseLong(tok[++i]); }
+                case "nodes" -> { if (hasValue) limits.nodes = Long.parseLong(tok[++i]); }
+                case "depth" -> { if (hasValue) limits.depth = Integer.parseInt(tok[++i]); }
                 case "infinite" -> limits.infinite = true;
                 default -> { }
             }

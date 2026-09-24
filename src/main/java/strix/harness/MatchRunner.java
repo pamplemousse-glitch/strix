@@ -129,7 +129,7 @@ public final class MatchRunner {
             while (!finished.get()) {
                 PairJob job = queue.poll();
                 if (job == null) return;
-                String opening = Openings.get(job.openingIndex());
+                String opening = Openings.lineFor(job.pairIndex());
 
                 // Same opening, both colours. This cancels the opening's built-in
                 // advantage, which is what makes an unbalanced book safe to use.

@@ -42,9 +42,24 @@ public final class Board {
         CASTLE_MASK[Square.A8] &= ~CASTLE_BQ;
     }
 
-    private final int[] undo = new int[1024];
-    private final long[] history = new long[1024];
+    /**
+     * Grown on demand rather than fixed, because the fixed version threw.
+     *
+     * uci/Main replays the entire game from the root board before searching, so
+     * the index is game plies plus up to MAX_PLY of search, not search alone.
+     * 1024 sounds generous and is about 480 moves; a bot game that shuffles can
+     * reach it, and the failure was an ArrayIndexOutOfBoundsException thrown out
+     * of make() in the middle of a real game on a real clock.
+     */
+    private int[] undo = new int[1024];
+    private long[] history = new long[1024];
     private int ply;
+
+    private void ensureCapacity() {
+        if (ply < undo.length) return;
+        undo = java.util.Arrays.copyOf(undo, undo.length * 2);
+        history = java.util.Arrays.copyOf(history, history.length * 2);
+    }
 
     public Board() {
         java.util.Arrays.fill(mailbox, Piece.NONE);
@@ -100,15 +115,70 @@ public final class Board {
         return isAttacked(kingSquare(color), Piece.other(color));
     }
 
-    // Undo record packing: captured piece (4) | castling (4) | ep+1 (7) | clock (8)
+    // Undo record packing: captured piece (4) | castling (4) | ep+1 (7) | clock (12)
+    //
+    // The clock field was 8 bits, which silently truncated any halfmove clock of
+    // 256 or more: `position fen ... 300 200` then make/unmake restored 44. That
+    // is a make/unmake asymmetry, and it feeds both isFiftyMoveDraw() and the
+    // lookback bound in isRepetition(). 12 bits holds 4095, far past the 100 the
+    // fifty-move rule can ever leave standing, and bits 27-31 are still spare.
     private static int packUndo(int captured, int castling, int ep, int clock) {
         int e = (ep == Square.NONE) ? 0 : ep + 1;
-        return (captured & 0xF) | ((castling & 0xF) << 4) | ((e & 0x7F) << 8) | ((clock & 0xFF) << 15);
+        return (captured & 0xF) | ((castling & 0xF) << 4) | ((e & 0x7F) << 8)
+                | ((Math.min(clock, 0xFFF) & 0xFFF) << 15);
     }
     private static int undoCaptured(int u) { int c = u & 0xF; return c == 0xF ? Piece.NONE : c; }
     private static int undoCastling(int u) { return (u >>> 4) & 0xF; }
     private static int undoEp(int u) { int e = (u >>> 8) & 0x7F; return e == 0 ? Square.NONE : e - 1; }
-    private static int undoClock(int u) { return (u >>> 15) & 0xFF; }
+    private static int undoClock(int u) { return (u >>> 15) & 0xFFF; }
+
+    /** True when a pawn of {@code byColor} stands beside {@code pawnSquare}, ready to take en passant. */
+    boolean hasEpCapturer(int pawnSquare, int byColor) {
+        int file = Square.file(pawnSquare), rank = Square.rank(pawnSquare);
+        long theirPawns = pieces(byColor, Piece.PAWN);
+        if (file > 0 && (theirPawns & (1L << Square.of(file - 1, rank))) != 0) return true;
+        return file < 7 && (theirPawns & (1L << Square.of(file + 1, rank))) != 0;
+    }
+
+    /**
+     * The ep square a FEN may keep, which is only one where the capture is real.
+     *
+     * A FEN can name any square. Trusting it let MoveGen emit an ep capture with
+     * no pawn to capture: from "4k3/8/8/3P4/8/8/8/4K3 w - e6 0 1" the engine
+     * played d5e6, the hash stopped matching Zobrist.compute, and unmake put a
+     * black pawn on e5 that had never existed.
+     */
+    int validatedEpSquare(int ep) {
+        if (ep == Square.NONE) return Square.NONE;
+        int rank = Square.rank(ep);
+        if (sideToMove == Piece.WHITE ? rank != 5 : rank != 2) return Square.NONE;
+
+        // The pawn that just double-pushed must be sitting behind the ep square.
+        int pushed = (sideToMove == Piece.WHITE) ? ep - 8 : ep + 8;
+        if (mailbox[pushed] != Piece.index(Piece.other(sideToMove), Piece.PAWN)) return Square.NONE;
+
+        return hasEpCapturer(pushed, sideToMove) ? ep : Square.NONE;
+    }
+
+    /**
+     * Castling rights a FEN may keep: only those whose king and rook are home.
+     *
+     * Rights were trusted outright, and MoveGen generates castling from rights
+     * alone. From "4k3/8/8/8/8/8/8/4K3 w KQ - 0 1", a board with no rooks at all,
+     * the engine generated e1c1 and playing it produced 2KR3R: two white rooks
+     * conjured out of nothing, because relocate() XORs bits that were clear.
+     * With the king off e1 it threw ArrayIndexOutOfBoundsException instead.
+     */
+    int validatedCastling(int rights) {
+        int ok = 0;
+        int wk = Piece.index(Piece.WHITE, Piece.KING), wr = Piece.index(Piece.WHITE, Piece.ROOK);
+        int bk = Piece.index(Piece.BLACK, Piece.KING), br = Piece.index(Piece.BLACK, Piece.ROOK);
+        if ((rights & CASTLE_WK) != 0 && mailbox[Square.E1] == wk && mailbox[Square.H1] == wr) ok |= CASTLE_WK;
+        if ((rights & CASTLE_WQ) != 0 && mailbox[Square.E1] == wk && mailbox[Square.A1] == wr) ok |= CASTLE_WQ;
+        if ((rights & CASTLE_BK) != 0 && mailbox[Square.E8] == bk && mailbox[Square.H8] == br) ok |= CASTLE_BK;
+        if ((rights & CASTLE_BQ) != 0 && mailbox[Square.E8] == bk && mailbox[Square.A8] == br) ok |= CASTLE_BQ;
+        return ok;
+    }
 
     public void make(int move) {
         int from = Move.from(move);
@@ -125,6 +195,7 @@ public final class Board {
             captured = mailbox[to];
         }
 
+        ensureCapacity();
         history[ply] = hash;
         undo[ply++] = packUndo(captured == Piece.NONE ? 0xF : captured,
                 castling, epSquare, halfmoveClock);
@@ -156,7 +227,12 @@ public final class Board {
         hash ^= Zobrist.CASTLING[castling];
 
         if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
-        epSquare = (flag == Move.DOUBLE_PUSH) ? ((from + to) / 2) : Square.NONE;
+        // Only when an enemy pawn is actually placed to take it. Setting it
+        // unconditionally XORs the ep file into the hash after every double push,
+        // so two positions that are identical under FIDE rules get different
+        // keys, and a threefold repetition spanning one of them is missed.
+        epSquare = (flag == Move.DOUBLE_PUSH && hasEpCapturer(to, them))
+                ? ((from + to) / 2) : Square.NONE;
         if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
 
         boolean pawnMove = Piece.typeOf(piece) == Piece.PAWN;
