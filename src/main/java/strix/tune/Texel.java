@@ -192,22 +192,37 @@ public final class Texel {
     /**
      * Group positions by the game they came from.
      *
-     * The generator writes a game's positions consecutively, and consecutive
-     * positions from one game share a result label and a pawn structure. A run of
-     * identical labels is therefore a good enough game boundary, and it is what
-     * lets the split be by game rather than by position.
+     * Files written by the current {@link SelfPlay} carry an explicit game id and
+     * are grouped by it exactly. See {@link Dataset}.
+     *
+     * Older files do not, and fall back to the original heuristic: the generator
+     * writes a game's positions consecutively and they share a result label, so a
+     * run of identical labels is a good enough boundary. It under-counts, because
+     * two consecutive games with the same result merge into one, which is
+     * conservative in the right direction: it can only make the split MORE
+     * separated, never less.
      */
     private static List<List<Sample>> loadByGame(Path path) throws IOException {
+        java.util.Map<Integer, List<Sample>> byId = new java.util.LinkedHashMap<>();
         List<List<Sample>> games = new ArrayList<>();
         List<Sample> current = new ArrayList<>();
         Double lastLabel = null;
 
         for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-            int bar = line.lastIndexOf('|');
-            if (bar < 0) continue;
+            Dataset.Row row = Dataset.parse(line);
+            if (row == null) continue;
             try {
-                Board b = Fen.parse(line.substring(0, bar).trim());
-                double r = Double.parseDouble(line.substring(bar + 1).trim());
+                Board b = Fen.parse(row.fen());
+                double r = Double.parseDouble(row.label());
+
+                if (row.gameId() != Dataset.NO_GAME) {
+                    byId.computeIfAbsent(row.gameId(), k -> new ArrayList<>())
+                        .add(new Sample(b, r));
+                    continue;
+                }
+
+                // Legacy file with no game id: fall back to the label-run
+                // heuristic below.
                 if (lastLabel != null && r != lastLabel && !current.isEmpty()) {
                     games.add(current);
                     current = new ArrayList<>();
@@ -217,6 +232,7 @@ public final class Texel {
             } catch (Exception ignored) { }
         }
         if (!current.isEmpty()) games.add(current);
+        games.addAll(byId.values());
         return games;
     }
 }

@@ -47,6 +47,26 @@ network never sees the positions a stronger engine reaches, even though the labe
 themselves are sound (that was the ADR 0013 fix and it worked; the labels are not
 what failed here).
 
+## The guardrail, added afterwards
+
+`Trainer` now computes independent samples divided by parameters before it trains
+anything, and refuses below 10x. Independent samples are games, counted from the
+game ids described above, not positions.
+
+```
+72 independent samples / 197,377 parameters = 0.00036x
+
+REFUSING TO TRAIN.
+```
+
+`--force` overrides it. `--curve` trains on 10/30/60/100% of the games and reports
+held-out loss for each, which separates the two cases every single number in this
+ADR conflated: a curve still falling at 100% means more data helps and the slope
+says how much, and a flat curve means data is not the constraint at all.
+
+Both are cheap, and either would have ended the first attempt in minutes instead
+of a day.
+
 ## What would be needed
 1. **Orders of magnitude more positions.** Real NNUE training uses hundreds of
    millions. Leela's open data or a very long Stockfish labelling run.
@@ -56,6 +76,45 @@ what failed here).
    than the piece-square tables it is competing with.
 
 This is a data problem. The inference is correct and stays.
+
+## A fourth thing, found later: the holdout was not a holdout
+
+**Date added:** 2026-09-24
+
+`Trainer` split its validation set randomly **by position**, and the class comment
+defended it:
+
+> the split here can be random, because each position carries its own independent
+> Stockfish label rather than a result shared with 32 of its neighbours
+
+The labels are independent. The positions are not. Two positions from the same
+game are a couple of moves apart and share a pawn structure and a piece set, so a
+random split drops near-duplicates of the training data into the validation set.
+
+The holdout was therefore answering "can it evaluate positions it has almost
+already seen", which is a much easier question than the one it was supposed to
+answer. That is how 0.0086 held-out loss, the lowest number this project ever
+recorded, sat next to -249 Elo.
+
+`Texel` never had this bug. It grouped by runs of identical result labels and
+split by game (ADR 0013). That trick does not transfer: Stockfish evaluations are
+near-unique per position, so there is no run to detect, and `Label` writes from
+several workers at once so a game's positions are not even adjacent by the time
+the trainer sees them.
+
+**Fix:** an explicit game id, written by `SelfPlay`, carried through `Label`, and
+used by both `Trainer` and `Texel` to split by game. The format and its fallback
+for older files live in `strix.tune.Dataset`. Verified on a fresh 20-game run:
+the explicit id recovers 15 distinct games where the old label-run heuristic sees
+9, because it merges consecutive games that ended the same way.
+
+**How much the old split flattered itself: not cleanly measured.** On a
+3,000-sample subset of `runs/labelled.txt`, a position-wise split reported 0.0159
+held-out loss against 0.0224 for a game-wise one. Treat that as indicative only:
+`labelled.txt` predates the game id, so the boundaries in that comparison were
+reconstructed rather than real. A clean figure needs a regenerated dataset, and
+would not change the decision either way, because the only verdict that counts is
+still SPRT.
 
 ## The pattern, for the third time
 | change | metric | reality |

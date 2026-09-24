@@ -56,14 +56,20 @@ public final class Label {
                         while (true) {
                             int i = next.getAndIncrement();
                             if (i >= total) break;
-                            int bar = lines.get(i).lastIndexOf('|');
-                            if (bar < 0) continue;
-                            String fen = lines.get(i).substring(0, bar).trim();
+                            Dataset.Row row = Dataset.parse(lines.get(i));
+                            if (row == null) continue;
+                            String fen = row.fen();
 
                             Integer cp = sf.evaluate(fen, DEPTH);
                             if (cp == null) continue;          // mate score, skip it
 
-                            buf.append(fen).append(" | ").append(cp).append('\n');
+                            // The game id has to survive relabelling. These
+                            // workers write into one file in whatever order they
+                            // finish, so by the time the trainer reads it a
+                            // game's positions are no longer even adjacent, and
+                            // the id is the only thing left that groups them.
+                            buf.append(Dataset.format(fen, String.valueOf(cp), row.gameId()))
+                               .append('\n');
                             if (++buffered >= 200) {
                                 synchronized (lock) { w.write(buf.toString()); }
                                 buf.setLength(0);

@@ -67,7 +67,7 @@ public final class SelfPlay {
                     while (true) {
                         int n = played.incrementAndGet();
                         if (n > games) return;
-                        int lines = playOne(search, rng, buf);
+                        int lines = playOne(search, rng, buf, n);
                         synchronized (lock) {
                             try { w.write(buf.toString()); } catch (Exception ignored) { }
                         }
@@ -85,7 +85,7 @@ public final class SelfPlay {
         System.out.printf("done: %d games, %,d positions -> %s%n", games, written.get(), out);
     }
 
-    private static int playOne(Search search, SplittableRandom rng, StringBuilder out) {
+    private static int playOne(Search search, SplittableRandom rng, StringBuilder out, int gameId) {
         Board board = Fen.parse(Fen.START);
         String opening = Openings.get(rng.nextInt(Openings.size()));
         for (String u : opening.trim().split("\\s+")) {
@@ -131,7 +131,11 @@ public final class SelfPlay {
             case BLACK_WINS -> "0.0";
             default -> "0.5";
         };
-        for (String fen : fens) out.append(fen).append(" | ").append(label).append('\n');
+        // The game id is what lets a holdout split keep a game whole. Positions
+        // from one game share a result label and a pawn structure, so splitting
+        // across them puts near-duplicates of the training data in the validation
+        // set. See Dataset.
+        for (String fen : fens) out.append(Dataset.format(fen, label, gameId)).append('\n');
         return fens.size();
     }
 
