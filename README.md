@@ -316,6 +316,7 @@ Each ADR records what else was considered and what the choice cost.
 - [0014](docs/adr/0014-nnue-rejected.md) NNUE, measured and rejected
 - [0015](docs/adr/0015-seek-rated-games.md) The bot challenges, it does not wait
 - [0016](docs/adr/0016-openings-must-not-repeat.md) A replayed game is not a second observation
+- [0017](docs/adr/0017-quiescence-and-the-missing-move.md) The engine returned no move, and quiescence is why
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.

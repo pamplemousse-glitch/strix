@@ -111,4 +111,47 @@ class SearchTest {
         assertTrue(ratio < 0.5,
                 "expected alpha-beta to cut well over half the tree, got " + (ratio * 100) + "%");
     }
+
+    /**
+     * The same invariant, over a corpus rather than a curated handful.
+     *
+     * The six-FEN list above is a safety net with a hole in it: it passed while
+     * negamax was missing the repetition, fifty-move and insufficient-material
+     * rules that alphaBeta applies, so the two were not computing the same
+     * function at all. Four of 150 random self-play positions disagreed at depth
+     * 4. None of the six caught it, because none of them reach a draw rule
+     * within four plies.
+     *
+     * Reads the generated dataset when it exists and skips otherwise, so the
+     * suite stays runnable on a fresh clone.
+     */
+    @Test @DisplayName("The invariant holds over a corpus, not just six positions")
+    void invariantHoldsOverManyPositions() throws Exception {
+        java.nio.file.Path data = java.nio.file.Path.of("runs/positions.txt");
+        org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.exists(data),
+                "runs/positions.txt not generated");
+
+        java.util.List<String> lines = java.nio.file.Files.readAllLines(data);
+        java.util.Collections.shuffle(lines, new java.util.Random(7));
+
+        int checked = 0;
+        for (String line : lines) {
+            int bar = line.indexOf('|');
+            if (bar < 0) continue;
+            String fen = line.substring(0, bar).trim();
+
+            Board a, b;
+            try { a = Fen.parse(fen); b = Fen.parse(fen); } catch (RuntimeException e) { continue; }
+
+            Search plain = new Search(new Material());
+            plain.useQuiescence = false;
+            Search pruned = new Search(new Material());
+            pruned.useQuiescence = false;
+
+            assertEquals(plain.negamax(a, 4), pruned.alphaBeta(b, 4),
+                    () -> "negamax and alpha-beta disagree on " + fen);
+            if (++checked >= 60) break;
+        }
+        assertTrue(checked > 0, "no usable positions in the corpus");
+    }
 }
