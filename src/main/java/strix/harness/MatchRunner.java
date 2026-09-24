@@ -56,7 +56,18 @@ public final class MatchRunner {
 
     /** One pair of games: the same opening, both colours. */
     private record PairJob(int openingIndex, int pairIndex) {
-        String key() { return openingIndex + ":" + pairIndex; }
+        // The pair index alone. openingIndex is pairIndex % Openings.size(), so
+        // the old "opening:pair" key baked the book size into the identity: a
+        // book edit between a crash and a resume renamed every key past the old
+        // size, and those pairs were both replayed from the log and re-run.
+        String key() { return String.valueOf(pairIndex); }
+
+        /** Legacy keys normalise to the new form so existing logs still resume. */
+        static String normalise(String key) {
+            String k = key.trim();
+            int colon = k.indexOf(':');
+            return colon < 0 ? k : k.substring(colon + 1);
+        }
     }
 
     private record PairResult(String key, int bucket, String detail) {}
@@ -238,7 +249,7 @@ public final class MatchRunner {
         for (String line : Files.readAllLines(config.log(), StandardCharsets.UTF_8)) {
             int tab = line.indexOf('\t');
             if (tab <= 0) continue;
-            String key = line.substring(0, tab);
+            String key = PairJob.normalise(line.substring(0, tab));
             if (done.add(key)) {
                 int second = line.indexOf('\t', tab + 1);
                 String bucket = line.substring(tab + 1, second < 0 ? line.length() : second);

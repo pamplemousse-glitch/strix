@@ -115,7 +115,14 @@ public final class Coordinator {
                 for (String line : Files.readAllLines(log, StandardCharsets.UTF_8)) {
                     int tab = line.indexOf('\t');
                     if (tab <= 0) continue;
-                    String key = line.substring(0, tab);
+                    // Normalised, so a log written under the old opening:pair
+                    // keys still matches the jobs generated now.
+                    String key;
+                    try {
+                        key = Job.normaliseKey(line.substring(0, tab));
+                    } catch (RuntimeException e) {
+                        continue;
+                    }
                     if (!counted.add(key)) continue;
                     int second = line.indexOf('\t', tab + 1);
                     String bucket = line.substring(tab + 1, second < 0 ? line.length() : second);
