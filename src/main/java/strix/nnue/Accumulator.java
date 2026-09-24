@@ -52,7 +52,7 @@ public final class Accumulator {
      * back. Over millions of make/unmake pairs that drifts, silently. A stack
      * cannot drift, and 96 plies of 2 x 256 floats is 200KB.
      */
-    private final float[][][] stack = new float[MAX_PLY][2][Network.HIDDEN];
+    private float[][][] stack = new float[MAX_PLY][2][Network.HIDDEN];
     private final Network network;
     private int ply;
 
@@ -97,14 +97,34 @@ public final class Accumulator {
      * Apply a move. Call this BEFORE {@code board.make(move)}, while the board
      * still shows what is being captured.
      */
+    private void grow() {
+        float[][][] bigger = new float[stack.length * 2][2][Network.HIDDEN];
+        for (int i = 0; i <= ply; i++) {
+            System.arraycopy(stack[i][0], 0, bigger[i][0], 0, Network.HIDDEN);
+            System.arraycopy(stack[i][1], 0, bigger[i][1], 0, Network.HIDDEN);
+        }
+        stack = bigger;
+    }
+
     public void make(Board board, int move) {
         // Carry the current totals up one ply, then apply the deltas there. The
         // ply below is left untouched, so unmake is just a decrement.
-        if (ply + 1 < MAX_PLY) {
-            System.arraycopy(stack[ply][0], 0, stack[ply + 1][0], 0, Network.HIDDEN);
-            System.arraycopy(stack[ply][1], 0, stack[ply + 1][1], 0, Network.HIDDEN);
-            ply++;
-        }
+        //
+        // Growing rather than silently skipping the push. The guard used to be
+        // `if (ply + 1 < MAX_PLY)`, so at the cap the deltas were applied IN
+        // PLACE at the current ply and the matching unmake then decremented past
+        // the state it should have restored. The accumulator stayed one ply out
+        // of step for the whole unwind and never recovered: measured against a
+        // from-scratch Network.evaluate, 0 mismatches at 95 plies and 79 at 96.
+        //
+        // Not reachable while Search.MAX_PLY is 64 and this is not wired into
+        // the search, which is exactly why it had to be fixed now rather than
+        // discovered later. The class invariant is "after any sequence of moves
+        // and unmoves", and a cap that silently breaks it is not a cap.
+        if (ply + 1 >= stack.length) grow();
+        System.arraycopy(stack[ply][0], 0, stack[ply + 1][0], 0, Network.HIDDEN);
+        System.arraycopy(stack[ply][1], 0, stack[ply + 1][1], 0, Network.HIDDEN);
+        ply++;
 
         int from = Move.from(move);
         int to = Move.to(move);

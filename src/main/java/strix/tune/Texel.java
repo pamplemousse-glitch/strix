@@ -71,6 +71,26 @@ public final class Texel {
 
         // Split by GAME. Splitting by position would put near-duplicates of the
         // training data into the validation set and hide overfitting entirely.
+        // Shuffled, like Trainer does, and with the same fixed seed so a run is
+        // still reproducible. Taking the first fifth in file order made the
+        // validation set the OLDEST games; on a file that concatenates a legacy
+        // run with a current one, loadByGame appends the id-tagged games after
+        // the heuristic ones, so the entire holdout came from the legacy part.
+        java.util.Collections.shuffle(games, new java.util.Random(12345));
+
+        // Two games is the minimum that can be split at all. Below that `train`
+        // comes out empty, error() returns 0/0 = NaN, every `improved < best`
+        // comparison against NaN is false so no parameter ever moves, and the
+        // tool writes the UNTUNED values while printing "wrote ...". A silent
+        // no-op that looks like a completed run.
+        if (games.size() < 2) {
+            System.err.printf("only %d game(s) in %s: nothing to hold out, refusing.%n",
+                    games.size(), data);
+            System.err.println("A legacy file whose results are all identical collapses to");
+            System.err.println("one game under the label-run heuristic. See Dataset.");
+            System.exit(2);
+        }
+
         int holdout = Math.max(1, games.size() / 5);
         List<Sample> validate = new ArrayList<>();
         List<Sample> train = new ArrayList<>();

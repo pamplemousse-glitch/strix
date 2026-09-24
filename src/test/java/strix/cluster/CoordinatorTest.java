@@ -108,7 +108,15 @@ final class CoordinatorTest {
 
         // The dead worker grabs a job and drops it. The live worker finishes one.
         // Alternating means roughly half the jobs are abandoned at least once.
+        // Bounded. Unbounded, any regression that stops a job being counted
+        // hangs the build instead of failing it, and a hung CI job is much
+        // harder to read than a red one.
+        int guard = 0;
         while (c.status().counted() < jobs) {
+            if (++guard > 10_000) {
+                org.junit.jupiter.api.Assertions.fail(
+                        "stuck at " + c.status().counted() + "/" + jobs + " after " + guard + " turns");
+            }
             if (deadTakes < 5 && c.lease("dead-worker").isPresent()) {
                 deadTakes++;
                 now.addAndGet(1_001);              // its lease lapses immediately

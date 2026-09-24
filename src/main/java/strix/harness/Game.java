@@ -98,6 +98,15 @@ public final class Game {
                 drawStreak = 0;
             }
         }
+        // The position after the LAST move was never tested, because the check
+        // sits at the top of the loop and the loop exits on the ply count. A
+        // game checkmated exactly on ply maxPlies was scored 0.5 instead of
+        // 1/0, which moves the pair a whole bucket.
+        GameResult last = GameResult.of(board);
+        if (last.isOver()) {
+            return new Outcome(last, plies, moves.toString().trim(),
+                    "decided on the final allowed ply");
+        }
         return new Outcome(GameResult.DRAW_FIFTY_MOVE, plies, moves.toString().trim(),
                 "hit the " + maxPlies + " ply cap");
     }

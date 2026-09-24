@@ -305,6 +305,10 @@ public final class Trainer {
 
         void featureBias(Network net, int h, float grad) {
             net.adjustFeatureBias(h, -update(grad, mBias, vBias, h));
+            // Clipped for the same reason the weights are, and it was missing.
+            // A little headroom past the window so a unit sitting at the edge
+            // can still be pushed back in by its weights.
+            net.clipFeatureBias(h, -0.25f, 1.25f);
         }
 
         void featureRow(Network net, int f, float[] grads) {
@@ -416,6 +420,19 @@ public final class Trainer {
                 System.exit(2);
             }
             System.out.printf("%nForced, and the ratio below is meaningless.%n");
+        }
+
+        // target = all.size()/5 is 0 for fewer than five loadable rows, which
+        // leaves validate empty: `validation /= validate.size()` is NaN and
+        // `validate.get(0)` in the live-unit count throws. Reachable by pointing
+        // Trainer at positions.txt, whose 1.0/0.5 labels all fail parseInt and
+        // are dropped one by one in silence.
+        if (split.validate().isEmpty() || split.trainGames().isEmpty()) {
+            System.err.printf("%nnot enough usable rows: %,d training games, %,d holdout positions.%n",
+                    split.trainGames().size(), split.validate().size());
+            System.err.println("Is this the right file? Trainer wants Stockfish centipawns");
+            System.err.println("(runs/labelled.txt), not the 1.0/0.5/0.0 results in positions.txt.");
+            System.exit(2);
         }
 
         int independentSamples = split.trainGames().size();

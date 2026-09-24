@@ -65,6 +65,18 @@ public final class MatchRunner {
     private final Sprt sprt;
     private final AtomicBoolean finished = new AtomicBoolean();
 
+    /**
+     * Workers still alive. The collector needs this to tell a slow pair from a
+     * dead fleet: both look like a poll timeout, and only one of them means the
+     * match is over.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger activeWorkers =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Engine restarts, reported at the end so a degraded run is never silent. */
+    private final java.util.concurrent.atomic.AtomicInteger workerRestarts =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     public MatchRunner(Config config, Sprt sprt) {
         this.config = config;
         this.sprt = sprt;
@@ -87,16 +99,44 @@ public final class MatchRunner {
         ExecutorService pool = Executors.newFixedThreadPool(config.workers());
         for (int w = 0; w < config.workers(); w++) {
             final int id = w;
-            pool.submit(() -> worker(id, queue, results));
+            activeWorkers.incrementAndGet();
+            pool.submit(() -> {
+                try {
+                    worker(id, queue, results);
+                } finally {
+                    activeWorkers.decrementAndGet();
+                }
+            });
         }
 
         try (BufferedWriter logWriter = Files.newBufferedWriter(config.log(),
                 StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
 
-            int sinceReport = 0;
+            // Non-zero so a resumed run consults the test on its first result
+            // instead of playing a whole batch past a bound it had already
+            // crossed. replayLog feeds sprt but cannot feed this counter.
+            int sinceReport = BATCH_PAIRS - 1;
+            int quietPolls = 0;
             while (!finished.get()) {
                 PairResult r = results.poll(60, TimeUnit.SECONDS);
-                if (r == null) break;                       // nothing in flight, nothing queued
+                if (r == null) {
+                    // A timeout is not "nothing in flight, nothing queued",
+                    // which is what the old comment here claimed. It is also
+                    // what a pair slower than 60s looks like, and what every
+                    // worker having died looks like. Only the last is terminal,
+                    // and ending the match on the other two truncated the sample
+                    // while Main went on to print a confident verdict.
+                    if (pool.isTerminated() || activeWorkers.get() == 0) {
+                        System.err.println("all workers gone after " + sprt.pairCount() + " pairs");
+                        break;
+                    }
+                    if (++quietPolls % 5 == 0) {
+                        System.err.printf("no result in %d minutes, %d workers alive, %d pairs done%n",
+                                quietPolls, activeWorkers.get(), sprt.pairCount());
+                    }
+                    continue;
+                }
+                quietPolls = 0;
 
                 logWriter.write(r.key() + "\t" + r.bucket() + "\t" + r.detail());
                 logWriter.newLine();
@@ -120,35 +160,69 @@ public final class MatchRunner {
             finished.set(true);
             pool.shutdownNow();
             pool.awaitTermination(10, TimeUnit.SECONDS);
+            if (workerRestarts.get() > 0) {
+                System.err.println("NOTE: " + workerRestarts.get()
+                        + " engine restart(s) during this run");
+            }
         }
         return sprt;
     }
 
+    /**
+     * Plays pairs until the queue is empty or the run ends, restarting its
+     * engines if they die.
+     *
+     * The IOException catch used to sit outside the loop, so one engine timeout
+     * retired the worker permanently. Parallelism degraded silently, and the
+     * pair it had already dequeued was never played by anyone. With enough
+     * workers gone the collector's poll timed out and the match ended early
+     * looking complete.
+     */
     private void worker(int id, BlockingQueue<PairJob> queue, BlockingQueue<PairResult> results) {
-        try (UciEngine a = open(config.engineA()); UciEngine b = open(config.engineB())) {
+        try {
             while (!finished.get()) {
-                PairJob job = queue.poll();
-                if (job == null) return;
-                String opening = Openings.lineFor(job.pairIndex());
-
-                // Same opening, both colours. This cancels the opening's built-in
-                // advantage, which is what makes an unbalanced book safe to use.
-                Game.Outcome first = Game.play(a, b, opening, config.goArgs(),
-                        config.timeoutMillis(), config.maxPlies());
-                if (finished.get()) return;
-                Game.Outcome second = Game.play(b, a, opening, config.goArgs(),
-                        config.timeoutMillis(), config.maxPlies());
-
-                double aScore = first.result().whiteScore() + (1.0 - second.result().whiteScore());
-                int bucket = (int) Math.round(aScore * 2);   // 0..4 in half-points
-                results.put(new PairResult(job.key(), bucket,
-                        first.result() + "/" + second.result()));
+                try (UciEngine a = open(config.engineA()); UciEngine b = open(config.engineB())) {
+                    while (!finished.get()) {
+                        PairJob job = queue.poll();
+                        if (job == null) return;
+                        try {
+                            playPair(a, b, job, results);
+                        } catch (IOException e) {
+                            // Put it back before reopening: an engine that died
+                            // mid-pair leaves a job nobody has played.
+                            queue.put(job);
+                            throw e;
+                        }
+                    }
+                    return;
+                } catch (IOException e) {
+                    if (finished.get()) return;
+                    System.err.println("worker " + id + ": " + e.getMessage() + ", restarting engines");
+                    workerRestarts.incrementAndGet();
+                    Thread.sleep(500);
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (IOException e) {
-            if (!finished.get()) System.err.println("worker " + id + ": " + e.getMessage());
         }
+    }
+
+    private void playPair(UciEngine a, UciEngine b, PairJob job, BlockingQueue<PairResult> results)
+            throws IOException, InterruptedException {
+        String opening = Openings.lineFor(job.pairIndex());
+
+        // Same opening, both colours. This cancels the opening's built-in
+        // advantage, which is what makes an unbalanced book safe to use.
+        Game.Outcome first = Game.play(a, b, opening, config.goArgs(),
+                config.timeoutMillis(), config.maxPlies());
+        if (finished.get()) return;
+        Game.Outcome second = Game.play(b, a, opening, config.goArgs(),
+                config.timeoutMillis(), config.maxPlies());
+
+        double aScore = first.result().whiteScore() + (1.0 - second.result().whiteScore());
+        int bucket = (int) Math.round(aScore * 2);   // 0..4 in half-points
+        results.put(new PairResult(job.key(), bucket,
+                first.result() + "/" + second.result()));
     }
 
     private UciEngine open(EngineSpec spec) throws IOException {
@@ -168,7 +242,14 @@ public final class MatchRunner {
             if (done.add(key)) {
                 int second = line.indexOf('\t', tab + 1);
                 String bucket = line.substring(tab + 1, second < 0 ? line.length() : second);
-                try { sprt.record(Integer.parseInt(bucket.trim())); } catch (NumberFormatException ignored) { }
+                // Range, not just parseability: Sprt.record indexes an array of
+                // 5, so a garbled bucket threw an uncaught AIOOBE and killed the
+                // resume rather than skipping one line.
+                try {
+                    int v = Integer.parseInt(bucket.trim());
+                    if (v >= 0 && v <= 4) sprt.record(v);
+                    else System.err.println("ignoring out-of-range bucket " + v + " for " + key);
+                } catch (NumberFormatException ignored) { }
             }
         }
         return done;

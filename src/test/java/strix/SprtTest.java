@@ -73,7 +73,12 @@ class SprtTest {
         // The Jeffreys prior shifts this slightly; the bound is deliberately loose.
         assertTrue(rejected > accepted * 3,
                 "0 Elo patch: " + accepted + " accepted vs " + rejected + " rejected");
-        assertTrue(accepted <= 8, "too many false accepts: " + accepted + "/40, alpha is 0.05");
+        // Was `accepted <= 8`, which is a 20% false-accept rate passing a test
+        // whose whole subject is an alpha of 0.05. Measured over 200 trials the
+        // shipped formula sits near 0.035, so 4/40 leaves real headroom for the
+        // Jeffreys prior and for seed luck while still failing a regression that
+        // doubles the true rate.
+        assertTrue(accepted <= 4, "too many false accepts: " + accepted + "/40, alpha is 0.05");
     }
 
     @Test @DisplayName("Stops far sooner than a fixed game count")

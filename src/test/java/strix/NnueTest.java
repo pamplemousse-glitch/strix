@@ -154,4 +154,43 @@ class NnueTest {
         for (int i = 0; i < n; i++) if (Move.toUci(m[i]).equals(uci)) return m[i];
         throw new IllegalStateException("no legal move " + uci);
     }
+
+    @Test @DisplayName("The incremental invariant survives past the old 96-ply cap")
+    void deepGamesDoNotDesync() {
+        // The stack was fixed at 96 and the push was guarded by
+        // `if (ply + 1 < MAX_PLY)`. At the cap the deltas were applied IN PLACE
+        // at the current ply, so the matching unmake decremented past the state
+        // it should have restored and the accumulator stayed one ply out of
+        // step for the entire unwind. Measured before the fix: 0 mismatches at
+        // 95 plies, 79 at 96.
+        Board board = Fen.parse(Fen.START);
+        Accumulator acc = new Accumulator(NET);
+        acc.refresh(board);
+
+        java.util.ArrayDeque<Integer> played = new java.util.ArrayDeque<>();
+        java.util.SplittableRandom rng = new java.util.SplittableRandom(99);
+        int[] moves = new int[MoveGen.MAX_MOVES];
+        int[] scratch = new int[MoveGen.MAX_MOVES];
+
+        for (int ply = 0; ply < 130; ply++) {
+            int n = MoveGen.generateLegal(board, moves, scratch);
+            if (n == 0) break;
+            int m = moves[rng.nextInt(n)];
+            acc.make(board, m);
+            board.make(m);
+            played.push(m);
+        }
+        assertTrue(played.size() > 96, "need to get past the old cap to test it");
+
+        while (!played.isEmpty()) {
+            int m = played.pop();
+            board.unmake(m);
+            acc.unmake();
+
+            Accumulator fresh = new Accumulator(NET);
+            fresh.refresh(board);
+            assertEquals(fresh.evaluate(board.sideToMove), acc.evaluate(board.sideToMove),
+                    "incremental drifted from scratch at ply " + played.size());
+        }
+    }
 }

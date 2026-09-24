@@ -21,12 +21,27 @@ public final class UciEngine implements AutoCloseable {
     public UciEngine(String name, List<String> command) throws IOException {
         this.name = name;
         ProcessBuilder pb = new ProcessBuilder(command);
-        pb.redirectErrorStream(false);
+        // Merged, not separate. Nothing ever read the error stream, so a
+        // subprocess that printed more than a pipe buffer of diagnostics (a
+        // stack trace, a JIT or GC warning) blocked in write, stopped answering
+        // go, and timed out. The engine looked hung for no visible reason.
+        //
+        // Merging is safe because every read here matches a UCI prefix, so a
+        // stray line is ignored rather than misparsed.
+        pb.redirectErrorStream(true);
         process = pb.start();
         out = new BufferedReader(new InputStreamReader(process.getInputStream()));
         in = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
-        send("uci");
-        awaitPrefix("uciok", 10_000);
+        try {
+            send("uci");
+            awaitPrefix("uciok", 10_000);
+        } catch (IOException e) {
+            // Otherwise a failed handshake leaves a live subprocess behind, one
+            // per attempt. Reachable under load: several JVMs starting at once
+            // can exceed the 10s handshake window.
+            process.destroyForcibly();
+            throw e;
+        }
     }
 
     public void send(String line) throws IOException {
@@ -65,7 +80,16 @@ public final class UciEngine implements AutoCloseable {
 
         while (System.currentTimeMillis() < deadline) {
             if (!out.ready()) {
-                try { Thread.sleep(1); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                // Re-setting the flag and continuing meant the next sleep(1)
+                // threw immediately, so an interrupted worker span at 100% CPU
+                // until its deadline rather than stopping. shutdownNow() could
+                // leave one core per worker burning for up to a minute.
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new InterruptedIOException(name + " interrupted");
+                }
                 continue;
             }
             String line = out.readLine();
@@ -106,7 +130,16 @@ public final class UciEngine implements AutoCloseable {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
             if (!out.ready()) {
-                try { Thread.sleep(1); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                // Re-setting the flag and continuing meant the next sleep(1)
+                // threw immediately, so an interrupted worker span at 100% CPU
+                // until its deadline rather than stopping. shutdownNow() could
+                // leave one core per worker burning for up to a minute.
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new InterruptedIOException(name + " interrupted");
+                }
                 continue;
             }
             String line = out.readLine();
@@ -125,5 +158,9 @@ public final class UciEngine implements AutoCloseable {
             process.destroyForcibly();
             Thread.currentThread().interrupt();
         }
+        // The pipes are file descriptors and this class is created twice per
+        // worker for the life of a run.
+        try { in.close(); } catch (IOException ignored) { }
+        try { out.close(); } catch (IOException ignored) { }
     }
 }

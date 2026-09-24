@@ -56,8 +56,17 @@ public final class Coordinator {
     public record Lease(String workerId, long expiresAtMillis) {}
 
     /** What the coordinator knows, for /status and for tests. */
+    /**
+     * A single consistent snapshot.
+     *
+     * {@code games} is in here rather than read from the Sprt afterwards because
+     * the caller printing the verdict used to fetch the game count outside the
+     * lock, so a late submit between the two lines could make the count and the
+     * verdict describe different samples.
+     */
     public record Status(long counted, int pending, int inFlight, long duplicates,
-                         long expired, double elo, double llr, Sprt.Verdict verdict) {}
+                         long expired, long late, long games,
+                         double elo, double llr, Sprt.Verdict verdict) {}
 
     private final Object lock = new Object();
 
@@ -75,6 +84,8 @@ public final class Coordinator {
 
     private long duplicates;
     private long expired;
+    /** Results that arrived after the test settled and were therefore not evidence. */
+    private long late;
     private boolean stopped;
 
     public Coordinator(Sprt sprt, Path log, long leaseMillis, int maxPairs) {
@@ -109,7 +120,9 @@ public final class Coordinator {
                     int second = line.indexOf('\t', tab + 1);
                     String bucket = line.substring(tab + 1, second < 0 ? line.length() : second);
                     try {
-                        sprt.record(Integer.parseInt(bucket.trim()));
+                        int v = Integer.parseInt(bucket.trim());
+                        if (v >= 0 && v <= 4) sprt.record(v);
+                        else System.err.println("ignoring out-of-range bucket " + v + " for " + key);
                     } catch (NumberFormatException ignored) {
                         // A truncated final line is expected after a hard kill. The key
                         // still counts as done; only its observation is lost.
@@ -121,6 +134,18 @@ public final class Coordinator {
                 Job job = new Job(p % Openings.size(), p);
                 if (!counted.contains(job.key())) pending.addLast(job);
             }
+
+            // Re-derived, not assumed false. Restarting against a log that
+            // already reached maxPairs left stopped false, so Main's
+            // `while (!c.stopped())` spun forever and never printed a verdict,
+            // while workers got 204 and went home. A healthy-looking dead
+            // coordinator, which the README's `until ...; do sleep 5; done`
+            // supervisor will not restart either.
+            if (counted.size() >= maxPairs) stopped = true;
+            if (sprt.pairCount() >= Sprt.MIN_PAIRS && sprt.verdict() != Sprt.Verdict.CONTINUE) {
+                stopped = true;
+            }
+            if (stopped) System.out.println("resumed into an already-settled run");
         }
     }
 
@@ -160,8 +185,29 @@ public final class Coordinator {
             // holder's submission is the one that gets dropped below.
             inFlight.remove(key);
 
-            if (!counted.add(key)) {
+            if (counted.contains(key)) {
                 duplicates++;
+                return false;
+            }
+
+            // Range-checked here, before anything is committed. Sprt.record is a
+            // bare array index, and an out-of-range bucket from a worker on a
+            // different build used to throw AFTER the key was marked counted and
+            // the line was on disk: the observation was lost, the key could never
+            // be requeued, and every later resume died on that line.
+            if (bucket < 0 || bucket > 4) {
+                System.err.println("rejecting out-of-range bucket " + bucket + " for " + key);
+                pending.addFirst(Job.fromKey(key));
+                return false;
+            }
+
+            // Results that arrive after the test settles are not evidence. The
+            // run already stopped; recording them enlarges the sample past the
+            // crossing and can flip a marginal verdict back. lease() checked
+            // this and submit() did not, so every worker still mid-pair at the
+            // moment of crossing had its result counted anyway.
+            if (stopped) {
+                late++;
                 return false;
             }
 
@@ -169,7 +215,18 @@ public final class Coordinator {
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
                 w.write(key + "\t" + bucket + "\t" + detail);
                 w.newLine();
-            }   // durable before it counts, same ordering MatchRunner uses
+            }   // durable BEFORE it counts
+
+            // Only now. The previous order marked the key counted first, so a
+            // failed write (ENOSPC, read-only fs) left a pair in neither the log
+            // nor the SPRT, unrequeueable because sweepExpired skips counted
+            // keys, while the run still terminated at maxPairs looking complete.
+            counted.add(key);
+
+            // A job counted while sitting in pending, after its lease lapsed and
+            // a late result arrived, was handed out again and replayed for
+            // nothing.
+            pending.removeIf(j -> j.key().equals(key));
 
             sprt.record(bucket);
 
@@ -220,8 +277,16 @@ public final class Coordinator {
 
     public Status status() {
         synchronized (lock) {
+            // Sweeping here too. It used to run only inside lease(), so if the
+            // last worker died holding the final job nothing ever called lease()
+            // again: the lease never expired, the job never returned to pending,
+            // and Main's loop never ended. /status meanwhile reported
+            // "inflight 1 pending 0" for a lease that had lapsed hours earlier,
+            // which is the README's documented morning check.
+            sweepExpired();
             return new Status(counted.size(), pending.size(), inFlight.size(),
-                    duplicates, expired, sprt.elo(), sprt.llr(), sprt.verdict());
+                    duplicates, expired, late, sprt.gameCount(),
+                    sprt.elo(), sprt.llr(), sprt.verdict());
         }
     }
 

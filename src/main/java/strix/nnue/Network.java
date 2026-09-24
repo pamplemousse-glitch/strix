@@ -140,6 +140,21 @@ public final class Network {
     public void adjustOutputBias(float delta) { outputBias += delta; }
     public void adjustOutputWeight(int i, float delta) { outputWeights[i] += delta; }
     public void adjustFeatureBias(int h, float delta) { featureBias[h] += delta; }
+
+    /**
+     * Hold a feature bias inside [0, 1], the clipped-ReLU window.
+     *
+     * The weights were clipped and the bias was not, though it is the term that
+     * shifts every unit bodily. It starts at 0.5, in the middle of the window,
+     * and nothing stopped it drifting out: a unit whose bias leaves [0, 1] is
+     * saturated for every input, the gradient through a clipped ReLU outside its
+     * window is exactly zero, and it can never come back. That is the death mode
+     * that cost 254 of 256 units and -249 Elo. See ADR 0014.
+     */
+    public void clipFeatureBias(int h, float lo, float hi) {
+        if (featureBias[h] < lo) featureBias[h] = lo;
+        else if (featureBias[h] > hi) featureBias[h] = hi;
+    }
     public void adjustFeatureWeight(int f, int h, float delta) { featureWeights[f][h] += delta; }
 
     /** Hold a feature weight inside +/- limit, so the accumulator cannot outgrow the activation. */

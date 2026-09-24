@@ -208,10 +208,22 @@ public final class LichessBot {
         return false;
     }
 
+    /**
+     * Fire-and-report, for accept and decline.
+     *
+     * The body used to be discarded entirely, so a 429 on an accept printed
+     * "accepting challenge X" and then nothing happened at all, with no way to
+     * tell that from a challenge the opponent withdrew. The seek loop already
+     * learned this lesson; this path had not.
+     */
     private void post(String path) {
         try {
-            http.send(request(path).POST(HttpRequest.BodyPublishers.noBody()).build(),
-                    HttpResponse.BodyHandlers.discarding());
+            var resp = http.send(request(path).POST(HttpRequest.BodyPublishers.noBody()).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                System.err.println("POST " + path + " -> " + resp.statusCode()
+                        + " " + summarise(resp.body()));
+            }
         } catch (Exception e) {
             System.err.println("POST " + path + " failed: " + e.getMessage());
         }

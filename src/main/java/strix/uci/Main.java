@@ -65,7 +65,12 @@ public final class Main {
                     out("uciok");
                 }
                 case "setoption" -> { join(); setOption(tok); }
-                case "isready" -> { join(); out("readyok"); }
+                // No join(). The spec requires isready to be answered even
+                // while searching, and a GUI uses it as a liveness probe. This
+                // blocked the reader thread on the search worker, so during
+                // "go movetime 8000" readyok arrived eight seconds late, after
+                // bestmove, which is the opposite of what it is for.
+                case "isready" -> out("readyok");
                 // search.tt, not tt: setOption replaces the table when Hash
                 // changes, and clearing the original left the live one holding
                 // entries from the previous game.

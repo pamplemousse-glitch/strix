@@ -34,7 +34,10 @@ public final class Main {
         String candOpts = args.length > 5 ? args[5] : "-";
         double elo1 = args.length > 6 ? Double.parseDouble(args[6]) : 5.0;
 
-        java.nio.file.Files.createDirectories(log.getParent());
+        // getParent() is null for a bare filename like "match.tsv", which NPE'd
+        // before a single game was played.
+        Path parent = log.getParent();
+        if (parent != null) java.nio.file.Files.createDirectories(parent);
 
         var baseline = spec("baseline", baseOpts);
         var candidate = spec("candidate", candOpts);
