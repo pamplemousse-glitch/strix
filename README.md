@@ -55,7 +55,7 @@ position is reached by many different move orders (a transposition table).
 `Rules` and `Evaluation` are plain functions. `Search` calls them millions of times per
 second. `UCI` is the door the GUI talks through. Search is the only hard part.
 
-## Two claims, both externally checkable
+## Claims, all externally checkable
 
 **Correctness.** The move generator reproduces the published `perft` node counts exactly on
 six standard positions, both colors, verified in CI. One wrong rule and the build fails.
@@ -116,12 +116,26 @@ Reproduce any row:
 java -cp build/classes/java/main strix.harness.Main 4 20000 1200 runs/x.tsv "Ordering=false" 100
 ```
 
-**Strength against outside opposition: not measured.** The Lichess bot client ships
-(`strix.lichess.LichessBot`, runs as a launchd service), but it has not earned a public
-rating yet, so no Elo figure against other engines is claimed anywhere in this repo. The
-self-play numbers above compare Strix to Strix, and are labeled as such.
+**Strength against outside opposition: being measured now, publicly.**
+[lichess.org/@/antoinepamplemousse](https://lichess.org/@/antoinepamplemousse)
 
-Neither claim asks you to trust the author.
+The bot plays rated 3+2 games against other Lichess bots, continuously, as a launchd
+agent. The rating on that profile is the one number in this project that does not
+depend on trusting the author, and it is not one I control.
+
+Until it has played enough games the rating is marked provisional and means very
+little, so no figure is quoted here. Read it off the profile.
+
+It had to be made to seek games. The client shipped on 2026-09-16 and only ever
+*accepted* challenges, which meant eight days of perfect uptime and zero games,
+because nothing challenges an unrated bot nobody has heard of. See
+[ADR 0015](docs/adr/0015-seek-rated-games.md), including the daily bot-versus-bot cap
+that a naive retry loop sleeps through, and the fact that Lichess puts challenges you
+*send* on the same event stream as the ones you receive.
+
+The self-play numbers above compare Strix to Strix, and stay labeled as such.
+
+No claim here asks you to trust the author.
 
 ## Quickstart
 
@@ -131,6 +145,29 @@ Neither claim asks you to trust the author.
 ```
 
 To play against it, point any UCI GUI (Cute Chess, Arena, BanksiaGUI) at the built jar.
+
+## Playing on Lichess
+
+The bot needs a BOT-account token in `.lichess-token` (gitignored). Then:
+
+```bash
+ops/install-bot-service.sh            # builds the jar, installs the launchd agent
+ops/bot status                        # also: logs, stop, start
+```
+
+It plays rated 3+2 by default, one game at a time, and challenges online bots rather
+than waiting to be challenged. Arguments are `<token-file> <maxGames> <clockSeconds>
+<increment>` if you want something else.
+
+**One game at a time is a strength decision, not politeness.** The harness runs at
+fixed nodes, where two games sharing a core give identical results to one
+([ADR 0011](docs/adr/0011-nodestime-over-wall-clock.md)). On a real clock a second game
+halves the nodes this one searches, so a rating collected under contention is a rating
+for a slower engine.
+
+Restarts are free: `rejoinOngoing` picks up games already in progress, because
+abandoning a live game on the clock is a loss and a bounced process is not a chess
+result.
 
 ## Running the harness across machines
 
@@ -234,12 +271,20 @@ wc -l < runs/overnight.tsv
 Each ADR records what else was considered and what the choice cost.
 
 - [0001](docs/adr/0001-bitboards-over-mailbox.md) Bitboards over a mailbox array
+- [0002](docs/adr/0002-magic-bitboards.md) Magic bitboards for sliding pieces
 - [0003](docs/adr/0003-pseudo-legal-generation.md) Pseudo-legal generation with a legality filter
 - [0004](docs/adr/0004-make-unmake-and-packed-moves.md) Make/unmake in place, moves packed into an int
 - [0005](docs/adr/0005-alpha-beta-not-pvs.md) Alpha-beta, and why negamax is kept forever
 - [0006](docs/adr/0006-quiescence-is-mandatory.md) Quiescence search
 - [0007](docs/adr/0007-transposition-table.md) Transposition table
 - [0008](docs/adr/0008-move-ordering.md) Move ordering
+- [0009](docs/adr/0009-repetition-detection.md) Repetition detection
+- [0010](docs/adr/0010-sprt-normal-approximation.md) SPRT: the normal approximation, and why it was replaced (superseded)
+- [0011](docs/adr/0011-nodestime-over-wall-clock.md) Fixed nodes over wall clock, for reproducibility
+- [0012](docs/adr/0012-sprt-bounds-match-effect-size.md) SPRT bounds must match the effect size you expect
+- [0013](docs/adr/0013-texel-tuning-rejected.md) Texel tuning, measured and rejected
+- [0014](docs/adr/0014-nnue-rejected.md) NNUE, measured and rejected
+- [0015](docs/adr/0015-seek-rated-games.md) The bot challenges, it does not wait
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.
@@ -257,6 +302,37 @@ injection that a node-count test happily passed.
   parallelise the tree.
 - **Not a GUI.** Speaking UCI means it does not need one.
 - **Not a chess variant engine.** Standard chess only.
+
+## Training the evaluation
+
+Both attempts at a learned evaluation were rejected on measurement
+([0013](docs/adr/0013-texel-tuning-rejected.md),
+[0014](docs/adr/0014-nnue-rejected.md)), and both failed for the same reason: not
+enough independent data. The trainer now refuses to repeat it.
+
+```bash
+java -cp build/classes/java/main strix.tune.Trainer runs/labelled.txt runs/net.bin 30
+```
+
+```
+72 independent samples / 197,377 parameters = 0.00036x
+
+REFUSING TO TRAIN.
+```
+
+**Independent samples are games, not positions.** 198,014 positions drawn from 6,000
+games is about 6,000 independent samples, because 33 positions from one game share a
+pawn structure and a piece set. The first NNUE run had 0.8x, fewer examples than
+unknowns, and that was computable before any training code ran.
+
+| flag | what it does |
+|---|---|
+| `--curve` | trains on 10/30/60/100% of the *games* and reports held-out loss for each. A falling curve says more data helps and the slope says how much; a flat one says data is not the constraint |
+| `--force` | trains anyway, below the floor |
+
+The holdout is split by **game**, never by position. Splitting by position puts
+near-duplicates of the training data into the validation set, which is how 0.0086
+held-out loss, the lowest figure this project ever recorded, sat next to -249 Elo.
 
 ## Testing
 
