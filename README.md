@@ -217,7 +217,21 @@ Reproduce any row:
 java -cp build/classes/java/main strix.harness.Main 4 20000 1200 runs/x.tsv "Ordering=false" 100
 ```
 
-**Strength against outside opposition: being measured now, publicly.**
+## Strength, by three independent methods
+
+| Method | Figure | Depends on |
+|---|---|---|
+| Lichess bot account | **1712** blitz, 71 rated games | whoever accepted a challenge |
+| vs Stockfish @1800, 20k nodes | **1883** +/- 75 | Stockfish's UCI_Elo scale |
+| vs Stockfish @1600, 20k nodes | 1754 +/- 60 | same |
+| Self-play feature table below | n/a, relative only | itself |
+
+Three methods bracketing the engine between the high 1700s and high 1800s is
+about as much as they can deliver, and the rungs disagreeing by 130 Elo is
+itself a result: `UCI_Elo` is calibrated against a clock, not a node count. See
+[ADR 0020](docs/adr/0020-external-calibration.md).
+
+**Strength against outside opposition, live:**
 [lichess.org/@/antoinepamplemousse](https://lichess.org/@/antoinepamplemousse)
 
 The bot plays rated 3+2 games against other Lichess bots, continuously, as a launchd
@@ -390,6 +404,7 @@ Each ADR records what else was considered and what the choice cost.
 - [0017](docs/adr/0017-quiescence-and-the-missing-move.md) The engine returned no move, and quiescence is why
 - [0018](docs/adr/0018-three-search-heuristics-that-lost.md) Three search heuristics that lost, and what they had in common
 - [0019](docs/adr/0019-see.md) Static exchange evaluation, and a prediction that held
+- [0020](docs/adr/0020-external-calibration.md) Measured against something that is not us
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.
