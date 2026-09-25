@@ -29,6 +29,19 @@ public final class Ordering {
     private static final int KILLER_1 = (1 << 19) + 1;
     private static final int KILLER_2 = 1 << 19;
 
+    /**
+     * Below every quiet move.
+     *
+     * A capture SEE says loses material is worse than an ordinary quiet move,
+     * so it is ranked beneath them rather than merely later among the captures.
+     * History scores are non-negative, so this has to be negative to sit under
+     * the worst of them.
+     */
+    private static final int LOSING_CAPTURE = -(1 << 20);
+
+    /** Switchable so the harness can measure SEE ordering. See ADR 0019. */
+    public boolean useSee = true;
+
     private final int[][] killers = new int[64][2];
     private final int[][] history = new int[12][64];
 
@@ -57,7 +70,15 @@ public final class Ordering {
                     ? Material.VALUE[Piece.PAWN]                       // en passant
                     : Material.VALUE[Piece.typeOf(victim)];
             int attackerValue = (attacker == Piece.NONE) ? 0 : Material.VALUE[Piece.typeOf(attacker)];
-            return CAPTURE_BASE + victimValue * 16 - attackerValue;
+            int mvvLva = victimValue * 16 - attackerValue;
+
+            // MVV-LVA only knows how big the victim is. It cannot see that RxP
+            // is losing when the pawn is defended, so the rook capture gets
+            // tried first, the refutation gets searched, and the work is thrown
+            // away. SEE plays the exchange out and demotes the losers BELOW the
+            // quiet moves, where they belong.
+            if (useSee && See.evaluate(board, move) < 0) return LOSING_CAPTURE + mvvLva;
+            return CAPTURE_BASE + mvvLva;
         }
 
         if (move == killers[ply][0]) return KILLER_1;

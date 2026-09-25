@@ -60,6 +60,18 @@ It also reframes the NNUE question. The case for NNUE was its own Elo. The case
 is now larger: a better evaluation is what unlocks null move, futility and
 aspiration, each of which is worth doing and none of which currently is.
 
+## The prediction this made, and how it turned out
+
+An observation that only explains the past is worth little, so this was turned
+into a prediction: static exchange evaluation reads material off the board and
+never asks the evaluation anything, so it belongs in the group that works, and
+**it should gain**.
+
+Measured afterwards: **+29.1 Elo, H1 after 538 games**. See ADR 0019. That makes
+the tally four for four on ordering-dependent techniques and nought for three on
+evaluation-dependent ones, and it is the first evidence that this is a mechanism
+rather than a coincidence over six samples.
+
 ## What was not concluded
 
 That the implementations are wrong. Each passed a gate designed to catch the

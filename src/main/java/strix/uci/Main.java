@@ -64,6 +64,7 @@ public final class Main {
                     out("option name Aspiration type check default false");
                     out("option name Lmr type check default true");
                     out("option name ShallowPruning type check default false");
+                    out("option name See type check default true");
                     out("option name Quiescence type check default true");
                     out("option name Eval type combo default psqt var psqt var material");
                     out("option name NetFile type string default <empty>");
@@ -115,6 +116,10 @@ public final class Main {
             // what the table is worth.
             int mb = Integer.parseInt(v);
             search.tt = (mb <= 0) ? null : new TranspositionTable(mb);
+        } else if (k.equalsIgnoreCase("See")) {
+            boolean on = Boolean.parseBoolean(v);
+            search.useSeePruning = on;
+            if (search.ordering != null) search.ordering.useSee = on;
         } else if (k.equalsIgnoreCase("ShallowPruning")) {
             boolean on = Boolean.parseBoolean(v);
             search.useLmp = on;

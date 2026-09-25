@@ -70,6 +70,12 @@ public final class Search {
      * Measured together with futility at 20,000 nodes: **-19.2 Elo**, H0 after
      * 362 games at bounds [0, 20].
      */
+    /**
+     * Skip losing captures in quiescence. Switchable so the harness can measure
+     * it separately from SEE move ordering. See ADR 0019.
+     */
+    public boolean useSeePruning = true;
+
     public boolean useLmp = false;
 
     /** Futility pruning. OFF by default, measured with LMP above. See ADR 0023. */
@@ -432,6 +438,12 @@ public final class Search {
             // capture tree. Measured on Kiwipete, depth 1 cost 28.2 SECONDS and
             // 28M nodes, against 2.0s for depth 2.
             if (ordering != null) ordering.pickBest(board, moves, n, i, Move.NONE, ply);
+
+            // A capture SEE says loses material does not belong in quiescence
+            // at all. Delta pruning below asks whether the capture is big
+            // enough; this asks whether it is sound, which is the question the
+            // stand-pat score cannot answer.
+            if (useSeePruning && !inCheck && See.evaluate(board, moves[i]) < 0) continue;
 
             // Delta pruning: if winning this piece outright still leaves us far
             // below alpha, the capture cannot rescue the position. Skipped while

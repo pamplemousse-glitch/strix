@@ -89,6 +89,7 @@ switched off, on a frozen jar, and audited clean by `strix.tools.LogAudit`.
 | Move ordering | **+559.2** | 26 | H1 |
 | Transposition table | **+147.2** | 50 | H1 |
 | Late move reductions | **+68.2** | 98 | H1 |
+| Static exchange evaluation | **+29.1** | 538 | H1 |
 | Principal variation search | **+26.1** | 746 | H1 |
 | Null move pruning | **+2.0, rejected** | 2,066 | could not be shown positive |
 | Futility + late move pruning | **-19.2, rejected** | 362 | H0 |
@@ -144,6 +145,12 @@ attempt was measured at -57.6 Elo and rejected.
 So roughly half the standard search toolkit is unavailable here until the
 evaluation improves. That is a larger argument for a working NNUE than the net's
 own Elo ever was.
+
+**That pattern then made a prediction, and it held.** Static exchange evaluation
+reads material off the board and never asks the evaluation anything, so ADR 0018
+predicted it would gain. It measured **+29.1 Elo**
+([ADR 0019](docs/adr/0019-see.md)). The tally is now four for four on
+ordering-dependent techniques and nought for three on evaluation-dependent ones.
 
 All three ship off, behind flags. A feature does not ship because the textbook
 says it should work.
@@ -382,6 +389,7 @@ Each ADR records what else was considered and what the choice cost.
 - [0016](docs/adr/0016-openings-must-not-repeat.md) A replayed game is not a second observation
 - [0017](docs/adr/0017-quiescence-and-the-missing-move.md) The engine returned no move, and quiescence is why
 - [0018](docs/adr/0018-three-search-heuristics-that-lost.md) Three search heuristics that lost, and what they had in common
+- [0019](docs/adr/0019-see.md) Static exchange evaluation, and a prediction that held
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.
