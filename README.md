@@ -83,7 +83,9 @@ move, exact GSPRT with the pentanomial pair model:
 | Feature | Elo | Games | Status |
 |---|---|---|---|
 | **Transposition table** | **+147.2** | 50 | **re-measured, clean** |
+| **Late move reductions** | **+68.2** | 98 | **measured, clean** |
 | **Principal variation search** | **+26.1** | 746 | **measured, clean** |
+| Aspiration windows | **-33.9, rejected** | 154 | measured, clean |
 | Piece-square tables | +544.7 | 24 | pre-fix, 24 distinct |
 | Move ordering | +246.6 | 208 | pre-fix, 96 distinct |
 | Magic bitboards | +31% nps, 0 Elo by design | n/a | |
@@ -110,6 +112,13 @@ it is worth **+147.2 Elo**, not the +33.5 the old run reported. The old number w
 wrong in both directions at once: inflated eightfold in confidence, and far too
 small in magnitude, because it was measuring 48 games over and over instead of
 385 different ones.
+
+**Aspiration windows are in the table because they lost.** The implementation
+passes its proof gates, and it still cost 33.9 Elo at this node count: the saving
+is fewer nodes per iteration, the cost is a full re-search whenever the window
+guess is wrong, and at 20k nodes the score is still moving between iterations. It
+ships off, behind a flag. A feature does not ship because the textbook says it
+should work.
 
 Measurements run against a frozen jar via `ops/measure`, because the harness
 launches engines from a classpath and recompiling mid-run silently swaps the

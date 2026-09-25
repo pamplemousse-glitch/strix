@@ -57,6 +57,8 @@ class AspirationTest {
         // LMR off: it is a heuristic that changes scores, so leaving it on would
         // make this a two-variable comparison.
         s.useLmr = false;
+        s.useLmp = false;
+        s.useFutility = false;
         s.ordering = new Ordering();
         if (tt) s.tt = new TranspositionTable(32);
         return s;

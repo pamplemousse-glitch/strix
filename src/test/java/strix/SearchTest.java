@@ -64,6 +64,8 @@ class SearchTest {
                 // in a comparison against unpruned negamax.
                 pruned.useNullMove = false;
                 pruned.useLmr = false;
+                pruned.useLmp = false;
+                pruned.useFutility = false;
                 int prunedScore = pruned.alphaBeta(Fen.parse(fen), depth);
                 long prunedNodes = pruned.nodes;
 
@@ -158,6 +160,8 @@ class SearchTest {
             // negamax would be asserting that a heuristic is not a heuristic.
             pruned.useNullMove = false;
             pruned.useLmr = false;
+            pruned.useLmp = false;
+            pruned.useFutility = false;
 
             assertEquals(plain.negamax(a, 4), pruned.alphaBeta(b, 4),
                     () -> "negamax and alpha-beta disagree on " + fen);
@@ -187,6 +191,8 @@ class SearchTest {
                 plain.usePvs = false;
                 plain.useNullMove = false;
                 plain.useLmr = false;
+                plain.useLmp = false;
+                plain.useFutility = false;
                 plain.ordering = new Ordering();
                 int plainScore = plain.alphaBeta(Fen.parse(fen), depth);
                 long plainNodes = plain.nodes;
@@ -195,6 +201,8 @@ class SearchTest {
                 pvs.usePvs = true;
                 pvs.useNullMove = false;
                 pvs.useLmr = false;
+                pvs.useLmp = false;
+                pvs.useFutility = false;
                 pvs.ordering = new Ordering();
                 int pvsScore = pvs.alphaBeta(Fen.parse(fen), depth);
                 long pvsNodes = pvs.nodes;
@@ -216,10 +224,14 @@ class SearchTest {
             plain.useQuiescence = false;
             plain.useNullMove = false;
             plain.useLmr = false;
+            plain.useLmp = false;
+            plain.useFutility = false;
             Search pvs = new Search(new Material());
             pvs.useQuiescence = false;
             pvs.useNullMove = false;
             pvs.useLmr = false;
+            pvs.useLmp = false;
+            pvs.useFutility = false;
             pvs.usePvs = true;
             pvs.ordering = new Ordering();
             assertEquals(plain.negamax(Fen.parse(fen), 4), pvs.alphaBeta(Fen.parse(fen), 4),

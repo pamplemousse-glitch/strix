@@ -58,6 +58,34 @@ public final class Search {
      */
     public boolean useNullMove = true;
 
+    /** Late move pruning. Switchable so the harness can measure it. See ADR 0023. */
+    public boolean useLmp = true;
+
+    /** Futility pruning. Switchable so the harness can measure it. See ADR 0023. */
+    public boolean useFutility = true;
+
+    /** Neither shallow pruning applies above this depth. */
+    private static final int SHALLOW_PRUNE_MAX_DEPTH = 4;
+
+    /**
+     * Quiet moves searched before late move pruning starts, by depth.
+     *
+     * Index 0 is unused (depth 0 goes to quiescence). The counts are generous
+     * at the low end so that a shallow node still looks at the moves ordering
+     * ranked highly, and grow with depth because a deeper search is worth more
+     * and should be trusted less to have ordered perfectly.
+     */
+    private static final int[] LMP_COUNT = {0, 6, 9, 14, 21};
+
+    /**
+     * Centipawns a quiet move is assumed unable to make up, by depth.
+     *
+     * Deliberately generous. This prunes on a static score alone, and a tight
+     * margin would discard real positional compensation; the measured cost of
+     * being too loose is only some wasted nodes.
+     */
+    private static final int[] FUTILITY_MARGIN = {0, 150, 300, 500, 750};
+
     /** Late move reductions. Switchable so the harness can measure it. See ADR 0022. */
     public boolean useLmr = true;
 
@@ -499,9 +527,38 @@ public final class Search {
         int bestScore = -INFINITY;
         int bestLocal = Move.NONE;
 
+        // Both shallow-depth prunings below need the static evaluation, and both
+        // are frequently skipped, so it is computed once and only when a node
+        // actually qualifies.
+        boolean canPruneQuiets = !root && !inCheckHere && beta == alpha + 1
+                && depth <= SHALLOW_PRUNE_MAX_DEPTH;
+        int staticEval = canPruneQuiets ? evaluator.evaluate(board) : 0;
+
         for (int i = 0; i < n; i++) {
             if (ordering != null) ordering.pickBest(board, moves, n, i, ttMove, ply);
             int move = moves[i];
+
+            // Shallow-depth pruning of quiet moves. Only ever applied after at
+            // least one move has been searched, because LMP_COUNT starts above
+            // zero: a node that pruned everything would return -INFINITY and
+            // report a loss that does not exist.
+            //
+            // Captures, promotions and moves made while in check are excluded
+            // for the same reason they are excluded from reductions: they are
+            // precisely the moves whose value is not predicted by a static score.
+            if (canPruneQuiets && bestScore > -MATE + MAX_PLY
+                    && !Move.isCapture(move) && !Move.isPromotion(move)) {
+
+                // Late move pruning: past a depth-dependent count, a quiet move
+                // this far down a well-ordered list is not going to be best.
+                if (useLmp && i >= LMP_COUNT[depth]) continue;
+
+                // Futility: if the static score plus a generous margin still
+                // does not reach alpha, a quiet move is very unlikely to. The
+                // margin grows with depth because a deeper search has more
+                // chances to find compensation.
+                if (useFutility && staticEval + FUTILITY_MARGIN[depth] <= alpha) continue;
+            }
 
             board.make(move);
 
