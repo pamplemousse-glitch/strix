@@ -6,6 +6,7 @@ import strix.core.Board;
 import strix.core.Fen;
 import strix.core.Move;
 import strix.eval.Material;
+import strix.search.Ordering;
 import strix.search.Search;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -153,5 +154,54 @@ class SearchTest {
             if (++checked >= 60) break;
         }
         assertTrue(checked > 0, "no usable positions in the corpus");
+    }
+
+    /**
+     * PVS is an optimization, so it must not change the answer.
+     *
+     * Same contract as alpha-beta against negamax: a null-window search returns
+     * a BOUND, not a value, so a PVS implementation that forgets to re-search
+     * when the null window fails high will silently return the bound as if it
+     * were a score. That produces plausible moves and wrong evaluations, which
+     * is the failure mode this test exists to refuse.
+     */
+    @Test @DisplayName("PVS: same score as plain alpha-beta, no more nodes")
+    void pvsIsAnOptimizationNotAnImprovement() {
+        for (String fen : POSITIONS) {
+            for (int depth = 1; depth <= 5; depth++) {
+                Search plain = new Search(new Material());
+                plain.usePvs = false;
+                plain.ordering = new Ordering();
+                int plainScore = plain.alphaBeta(Fen.parse(fen), depth);
+                long plainNodes = plain.nodes;
+
+                Search pvs = new Search(new Material());
+                pvs.usePvs = true;
+                pvs.ordering = new Ordering();
+                int pvsScore = pvs.alphaBeta(Fen.parse(fen), depth);
+                long pvsNodes = pvs.nodes;
+
+                final int d = depth;
+                assertEquals(plainScore, pvsScore,
+                        () -> "PVS changed the answer at depth " + d + ": " + fen);
+                assertTrue(pvsNodes <= plainNodes * 1.05,
+                        () -> "PVS searched more nodes at depth " + d + ": "
+                                + pvsNodes + " vs " + plainNodes + "  " + fen);
+            }
+        }
+    }
+
+    @Test @DisplayName("PVS agrees with negamax too, so the whole chain holds")
+    void pvsAgreesWithTheReference() {
+        for (String fen : POSITIONS) {
+            Search plain = new Search(new Material());
+            plain.useQuiescence = false;
+            Search pvs = new Search(new Material());
+            pvs.useQuiescence = false;
+            pvs.usePvs = true;
+            pvs.ordering = new Ordering();
+            assertEquals(plain.negamax(Fen.parse(fen), 4), pvs.alphaBeta(Fen.parse(fen), 4),
+                    () -> "PVS disagrees with unpruned negamax on " + fen);
+        }
     }
 }

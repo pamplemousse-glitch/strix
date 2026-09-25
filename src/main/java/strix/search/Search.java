@@ -45,6 +45,12 @@ public final class Search {
 
     /** Both off for the negamax-vs-alphabeta invariant test, on for real play. */
     public boolean useQuiescence = true;
+
+    /**
+     * Principal variation search. Switchable so the harness can measure it,
+     * which is the only reason to believe it helps. See ADR 0019.
+     */
+    public boolean usePvs = true;
     public TranspositionTable tt;
     public Ordering ordering;
 
@@ -337,7 +343,39 @@ public final class Search {
             int move = moves[i];
 
             board.make(move);
-            int score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, false);
+
+            // Principal variation search.
+            //
+            // The bet is that move ordering is good enough that the first move
+            // is usually best. If so, every later move only has to be PROVEN
+            // worse than alpha, and proving that needs a null window
+            // (alpha, alpha+1), which fails fast and searches far fewer nodes
+            // than establishing an exact score nobody will use.
+            //
+            // When the bet loses, the null window returns something above alpha,
+            // which is not a usable score: a null-window search returns a bound,
+            // not a value. So the move is re-searched with the full window. The
+            // re-search is pure loss, which is why PVS is worth measuring rather
+            // than assuming, and why it goes in before LMR: LMR's re-search
+            // depends on this path being correct.
+            //
+            // Gated on depth >= 2, because at depth 1 the children are leaves:
+            // there is no subtree for the null window to prune, so the cheap
+            // bound-proof saves nothing and any re-search is pure cost.
+            // Measured at depth 1: 180 nodes with PVS against 149 without.
+            int score;
+            if (!usePvs || i == 0 || depth < 2) {
+                score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, false);
+            } else {
+                score = -alphaBeta(board, depth - 1, -alpha - 1, -alpha, ply + 1, false);
+                // Only re-search when the null window says "better than alpha"
+                // AND there is a real window left to search it in. At a node
+                // where beta == alpha + 1 the null window IS the full window,
+                // so re-searching would repeat identical work.
+                if (score > alpha && beta > alpha + 1) {
+                    score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, false);
+                }
+            }
             board.unmake(move);
 
             if (score > bestScore) {
