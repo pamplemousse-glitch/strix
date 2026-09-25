@@ -65,6 +65,104 @@ parameters is 2M positions. The empirical record says that rule is far too
 generous: **20M is where it works at all, 100M+ is where it reliably beats a good
 hand-crafted eval.** This repo had 0.15M.
 
+## The finding that reorders the whole plan
+
+**PeSTO evaluates with piece-square tables and nothing else, and it is rated 2988
+CCRL Blitz.** Its author: *"there is a tempo bonus for the side to move, and
+that's it, no other chess knowledge is present in PeSTO."*
+
+Strix is at ~1650 with piece-square tables. **It is not eval-limited. It is
+search-limited by roughly 1300 Elo.**
+
+What actually lives at ~1650 CCRL: Rustic Alpha 1 (no transposition table),
+Stash v10/v11, and Lynx 0.13 — which had *more* eval than this engine (pawn
+structure, king safety, mobility) and still sat at 1632 for want of a TT.
+
+Measured ablation (Delorme's Dumb, removing one feature at a time):
+
+| Removed | Elo | Present here? |
+|---|---|---|
+| MVV-LVA | -495 | yes |
+| Transposition table | -283 | yes |
+| Late move reductions | **-229** | **no** |
+| Quiescence | -145 | yes |
+| Null move | **-116** | **no** |
+| Aspiration windows | **-101** | **no** |
+| History | **-94** | **no** |
+| Late move pruning | **-38** | **no** |
+
+That is roughly 600 Elo of measured, well-understood search work requiring no
+training data at all.
+
+### A first NNUE can be, and often is, negative
+
+| Engine | First net | Result |
+|---|---|---|
+| **Bagatur** | HalfKP via JNI | **-80 Elo**, at 12x slower nps |
+| **Svart** net 0003 | wdl 0.3, 80 epochs | **-63.2 +/- 97.4** |
+| **Svart** net 0001 | data from an opening book | **equal to HCE** |
+| **NoaChess** | HalfKAv2_hm, 13M positions | **+4.5 +/- 11.4** (zero is inside the interval) |
+| **Carp** net 0001 | 384 hidden, 100M fens | **-9.2** |
+| Carp net 0003 | *same 384 hidden*, 230M fens | **+22.5** |
+
+Carp 0001 vs 0003 is the cleanest controlled experiment in the corpus:
+identical architecture, and the only variable that moved was data volume.
+
+bullet's own documentation predicts it: *"an engine may (and likely will for a
+beginner) actually LOSE elo with an SF architecture vs a much simpler one."*
+
+### Three failures that were not about data, and each was invisible
+
+1. **Quantization.** NoaChess shipped a net with **85.6% of its feature
+   transformer quantised to exactly zero**, "evaluating 16.6% away from the
+   network that was trained". Fixing it was worth **+195 Elo with the engine
+   binary untouched**. Its engine-vs-trainer parity tests passed the whole time:
+   *"they verify that engine and trainer compute the same thing, not that the
+   thing is good."*
+2. **Eval scale, and this one applies directly here.** Neutron-o1 retrained a net
+   that improved on every metric, and it **lost 38 Elo**, because it was now
+   correctly calibrated while the search's pruning margins had been tuned for
+   years against a net that understated. One output-gain constant moved **~100
+   Elo**, and the bug had silently **inverted the sign of five earlier
+   architecture conclusions**. Any NNUE dropped into this engine changes the
+   eval distribution that every future futility, razoring and LMR margin is
+   tuned against.
+3. **Inference cost.** Leorik's naive C# NNUE ran at **50K nps, 100x slower**
+   than its hand-crafted eval. Bagatur needed a pure-Java rewrite to get from
+   -80 to +100, and incremental updates only 16 months later for another +30.
+
+### Java specifics, measured
+
+- Serendipity ran **scalar** NNUE for nine months before the Vector API.
+- Calvin's CReLU to SCReLU switch cost **41% of nps** (1.7M to 1.0M), recovering
+  to 1.4M after optimisation. Prefer CReLU while nps is the constraint.
+- Calvin **abandoned** a PR splitting inference behind an interface: 22% nps.
+  If that pattern is used, the field must be `static final` with exactly one
+  implementation loaded, or the call site goes bimorphic.
+- Discard the first two `bench` runs; JIT makes run 1 meaningless.
+- This machine is Intel AVX2, 256-bit vectors, so the Vector API path is
+  available. It is not on Apple Silicon, where it cannot emit `SDOT`.
+
+### Rating-list gains are about half of self-play gains
+
+Pedantic: +161 self-play at 20+0.2, **+95 CCRL**. akimbo: +388 self-play,
+**+309**. Midnight: +352 self-play, **+237**. And within self-play the gain
+shrinks with time control (Pedantic 161 to 142 to 125), which is the signature
+of an eval that is better per node and costs nodes.
+
+**Testing NNUE at 1650 will produce a large self-play number whether or not the
+net is any good**, masking both the net's defects and the search bugs beneath it.
+
+## Recommended order
+
+1. **Search.** Null move, LMR, aspiration windows, history, PVS, LMP/futility.
+   Each SPRT'd separately on the harness fixed in ADR 0016. ~600 Elo of measured
+   work, no data required.
+2. **Re-measure.** Against a known ladder (Stash v11 = 1690, v14 = 2060) rather
+   than only Lichess, so the number means something.
+3. **Then NNUE**, on the plan below. The already-written inference is not wasted
+   work; it converts far better from 2900 than from 1650.
+
 ## Plan
 
 ### Phase 0: close the attribution gap (half a day)
