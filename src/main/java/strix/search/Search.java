@@ -58,8 +58,55 @@ public final class Search {
      */
     public boolean useNullMove = true;
 
-    /** Aspiration windows. Switchable so the harness can measure it. See ADR 0021. */
-    public boolean useAspiration = true;
+    /** Late move reductions. Switchable so the harness can measure it. See ADR 0022. */
+    public boolean useLmr = true;
+
+    /** Below this depth there is nothing to save by reducing. */
+    private static final int LMR_MIN_DEPTH = 3;
+
+    /**
+     * Moves before this index are not reduced.
+     *
+     * The first is the principal variation candidate and the next few are the
+     * transposition-table move, the captures and the killers, i.e. precisely
+     * the moves ordering already has good reason to rank highly.
+     */
+    private static final int LMR_MIN_MOVE = 4;
+
+    /**
+     * Reduction by (depth, move index), the conventional logarithmic shape.
+     *
+     * Logarithmic rather than linear because both effects saturate: the twelfth
+     * move is much less promising than the fifth, the fortieth is barely worse
+     * than the twelfth, and the same holds for depth.
+     */
+    private static final int[][] REDUCTION = new int[64][64];
+    static {
+        for (int d = 1; d < 64; d++) {
+            for (int m = 1; m < 64; m++) {
+                REDUCTION[d][m] = (int) (0.75 + Math.log(d) * Math.log(m) / 2.25);
+            }
+        }
+    }
+
+    /**
+     * Aspiration windows. OFF by default, because it measured negative.
+     *
+     * SPRT at 20,000 nodes per move, against the same build with the flag off:
+     * **-33.9 Elo**, H0 after 154 games at bounds [0, 25].
+     *
+     * The code is correct as far as the proof gates can tell: it returns the
+     * same score as a full window without a transposition table, and the same
+     * move with one. It is simply not paying at this node count. The saving is
+     * fewer nodes per iteration; the cost is a full re-search whenever the
+     * window is wrong, and at 20k nodes the search is shallow enough that the
+     * score is still moving between iterations, so it is wrong often.
+     *
+     * Kept behind a flag rather than deleted, because the expected place for it
+     * to start paying is at longer time controls, and that is a measurement
+     * nobody has made yet. See ADR 0021.
+     */
+    public boolean useAspiration = false;
 
     /**
      * Half-width of the first aspiration window, in centipawns.
@@ -90,7 +137,8 @@ public final class Search {
     private volatile boolean stopped;
     private long deadline = Long.MAX_VALUE;
     private long nodeLimit = Long.MAX_VALUE;
-    private long nodesThisMove;
+    /** Nodes for the whole move, across all iterations. Readable so tests can compare cost. */
+    public long nodesThisMove;
     private Listener listener = (d, sc, n, ms, mv) -> {};
 
     /** Receives one call per completed iteration, for UCI info lines. */
@@ -476,15 +524,45 @@ public final class Search {
             // there is no subtree for the null window to prune, so the cheap
             // bound-proof saves nothing and any re-search is pure cost.
             // Measured at depth 1: 180 nodes with PVS against 149 without.
+            // Late move reductions.
+            //
+            // Move ordering puts the moves most likely to be best first, so a
+            // move sitting late in the list is probably not best. Search it
+            // shallower. If the shallow search is wrong and the move beats
+            // alpha after all, re-search it at full depth and lose nothing but
+            // the shallow search.
+            //
+            // Reduced only for quiet moves: captures, promotions and checks are
+            // exactly the moves whose value a shallow search misjudges. Checking
+            // AFTER make() is deliberate, since "does this move give check" is
+            // the opponent being in check, and the move is made either way.
+            int reduction = 0;
+            if (useLmr && depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE
+                    && !inCheckHere
+                    && !Move.isCapture(move) && !Move.isPromotion(move)
+                    && !board.inCheck(board.sideToMove)) {
+                reduction = REDUCTION[Math.min(depth, 63)][Math.min(i, 63)];
+                // Never reduce into quiescence: the point is a cheaper search,
+                // not a different kind of search.
+                reduction = Math.min(reduction, depth - 2);
+                if (reduction < 0) reduction = 0;
+            }
+
             int score;
             if (!usePvs || i == 0 || depth < 2) {
                 score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, false);
             } else {
-                score = -alphaBeta(board, depth - 1, -alpha - 1, -alpha, ply + 1, false);
-                // Only re-search when the null window says "better than alpha"
-                // AND there is a real window left to search it in. At a node
-                // where beta == alpha + 1 the null window IS the full window,
-                // so re-searching would repeat identical work.
+                // Null window, possibly reduced. Two things can go wrong and
+                // each gets its own re-search, in order of cost.
+                score = -alphaBeta(board, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, false);
+
+                // The reduction was wrong: re-search at full depth, still narrow.
+                if (reduction > 0 && score > alpha) {
+                    score = -alphaBeta(board, depth - 1, -alpha - 1, -alpha, ply + 1, false);
+                }
+                // The null window was only ever a bound: at a PV node we need a
+                // real score, so widen. At a node where beta == alpha + 1 the
+                // null window IS the full window and re-searching repeats work.
                 if (score > alpha && beta > alpha + 1) {
                     score = -alphaBeta(board, depth - 1, -beta, -alpha, ply + 1, false);
                 }

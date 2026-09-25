@@ -59,10 +59,11 @@ class SearchTest {
 
                 Search pruned = new Search(new Material());
                 pruned.useQuiescence = false;
-                // Null move is a heuristic, not an exact optimization: it can
-                // and does change the score. Only exact techniques belong in a
-                // comparison against unpruned negamax.
+                // Null move and LMR are heuristics, not exact optimizations:
+                // they can and do change the score. Only exact techniques belong
+                // in a comparison against unpruned negamax.
                 pruned.useNullMove = false;
+                pruned.useLmr = false;
                 int prunedScore = pruned.alphaBeta(Fen.parse(fen), depth);
                 long prunedNodes = pruned.nodes;
 
@@ -152,6 +153,11 @@ class SearchTest {
             plain.useQuiescence = false;
             Search pruned = new Search(new Material());
             pruned.useQuiescence = false;
+            // Exact techniques only. Null move and LMR are heuristics and are
+            // allowed to change the score; comparing them against unpruned
+            // negamax would be asserting that a heuristic is not a heuristic.
+            pruned.useNullMove = false;
+            pruned.useLmr = false;
 
             assertEquals(plain.negamax(a, 4), pruned.alphaBeta(b, 4),
                     () -> "negamax and alpha-beta disagree on " + fen);
@@ -180,6 +186,7 @@ class SearchTest {
                 Search plain = new Search(new Material());
                 plain.usePvs = false;
                 plain.useNullMove = false;
+                plain.useLmr = false;
                 plain.ordering = new Ordering();
                 int plainScore = plain.alphaBeta(Fen.parse(fen), depth);
                 long plainNodes = plain.nodes;
@@ -187,6 +194,7 @@ class SearchTest {
                 Search pvs = new Search(new Material());
                 pvs.usePvs = true;
                 pvs.useNullMove = false;
+                pvs.useLmr = false;
                 pvs.ordering = new Ordering();
                 int pvsScore = pvs.alphaBeta(Fen.parse(fen), depth);
                 long pvsNodes = pvs.nodes;
@@ -207,9 +215,11 @@ class SearchTest {
             Search plain = new Search(new Material());
             plain.useQuiescence = false;
             plain.useNullMove = false;
+            plain.useLmr = false;
             Search pvs = new Search(new Material());
             pvs.useQuiescence = false;
             pvs.useNullMove = false;
+            pvs.useLmr = false;
             pvs.usePvs = true;
             pvs.ordering = new Ordering();
             assertEquals(plain.negamax(Fen.parse(fen), 4), pvs.alphaBeta(Fen.parse(fen), 4),

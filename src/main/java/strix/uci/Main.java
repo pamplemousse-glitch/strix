@@ -61,7 +61,8 @@ public final class Main {
                     out("option name Ordering type check default true");
                     out("option name Pvs type check default true");
                     out("option name NullMove type check default true");
-                    out("option name Aspiration type check default true");
+                    out("option name Aspiration type check default false");
+                    out("option name Lmr type check default true");
                     out("option name Quiescence type check default true");
                     out("option name Eval type combo default psqt var psqt var material");
                     out("option name NetFile type string default <empty>");
@@ -113,6 +114,8 @@ public final class Main {
             // what the table is worth.
             int mb = Integer.parseInt(v);
             search.tt = (mb <= 0) ? null : new TranspositionTable(mb);
+        } else if (k.equalsIgnoreCase("Lmr")) {
+            search.useLmr = Boolean.parseBoolean(v);
         } else if (k.equalsIgnoreCase("Aspiration")) {
             search.useAspiration = Boolean.parseBoolean(v);
         } else if (k.equalsIgnoreCase("NullMove")) {
