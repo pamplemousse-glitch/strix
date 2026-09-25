@@ -182,7 +182,59 @@ single game was played: over a few thousand positions, log each unit's
 pre-activation min, max and mean, and count units never landing strictly inside
 `(0, QA)`. Log it every epoch, not at the end.
 
-### Phase 1: real data (half a day)
+### Phase 1: real data (about ten minutes)
+
+**`Lichess/fishnet-evals` on HuggingFace.** Every `%eval` from the monthly
+Lichess dumps, already extracted to Parquet. No PGN parsing, ever. CC0, no
+attribution and no account required.
+
+| | |
+|---|---|
+| Total | 34,463,231,919 rows, one file per month |
+| `standard_rated_2018_01.parquet` | 1.14 GB, **downloads in 34 seconds** |
+| Contents of that one file | **94,729,897 positions from 1,479,269 independent games** |
+| Read speed | 1,441,184 rows/s single core with pyarrow |
+| Schema | `fen`, `cp` / `mate` (White-relative), `move` |
+
+Two files is **~185M positions from ~2.9M independent games** for about 2.3 GB
+and five minutes.
+
+**The labels are the part that matters.** Lichess `%eval` comes from fishnet at
+**1,000,000 nodes per move**, which is a median depth of **21**. The first
+attempt labelled at depth 8, which needs a median of 1,596 nodes. That is
+roughly **600x less search per label**, obtained for free.
+
+Measured against Stockfish 19 at depth 18 over 120 positions, the Lichess evals
+give Pearson **r = 0.988**: the apparent 108 cp mean error is almost entirely a
+cp-scale offset (`SF19_d18 ~ 1.117 x lichess`), and a scale offset is harmless
+once the target goes through a sigmoid.
+
+Filters to apply while streaming: drop the 8% mate rows or clamp to +/-10000,
+drop `|cp| > 10000`, drop positions where the side to move is in check, and skip
+early plies (Stockfish uses `early_fen_skipping 28`, i.e. move 14, which is
+41.8% of rows here). Then shuffle, because rows arrive in game order.
+
+**One parameter change from last time, and it is not a small one.**
+fishnet-evals carries no game result, so train **pure eval**: bullet `wdl = 0.0`,
+nnue-pytorch `lambda = 1.0`. That is deliberately the opposite of the first
+attempt. Heavy WDL weighting is correct when labels are shallow and noisy, which
+depth-8 self-play labels were. With 1M-node labels this is Stockfish's own
+regime, and Stockfish runs `start-lambda 1.0`.
+
+Note the two tools define lambda in opposite directions: nnue-pytorch `lambda`
+1.0 means pure eval, bullet `wdl` 1.0 means pure game result.
+
+### Superseded: generating and labelling data ourselves
+
+Kept because the arithmetic is the argument. Measured on this machine, Stockfish
+19 single-threaded: **depth 8 = 195 positions/s/thread**, so 100M positions is
+**17.8 hours across 8 threads**, and depth 12 is 10 days. That would burn the
+entire budget to produce labels 600x shallower than a 34-second download. The
+Leela open data is also available but is ODbL share-alike and needs the lc0
+rescorer with Syzygy tablebases to become centipawns, which is not a one-day
+path.
+
+### Phase 1b: old notes on data sources
 
 Use the **Leela Chess Zero open data**, which is what both Calvin and Serendipity
 train on. Calvin used the Kaggle mirror
@@ -197,7 +249,15 @@ games carry `%eval` and the evals are shallower.
 
 ### Phase 2: train (hours, not days)
 
-**Keep the Java trainer.** Calvin abandoned his own Python trainer for bullet on
+**Keep the Java trainer, and the case for it is now stronger.** This machine is
+an **Intel** Mac, so there is no CUDA and no MPS, PyTorch's last macOS x86_64
+wheel is torch 2.2.2 against a current 2.14, and bullet has no CPU backend at
+all (only CUDA, ROCm and Metal) with a Metal path that has no macOS CI and is
+unverified on an Intel iGPU. Every external trainer is a yak shave here.
+
+Meanwhile the machine does **143 GFLOP/s** on Accelerate, and with a sparse
+first layer this net costs ~101 kFLOP per position, so a 400M-sample run is
+hours. The trainer already exists and is already correct. Calvin abandoned his own Python trainer for bullet on
 speed grounds, but this repo is explicitly a from-scratch project and the trainer
 is not the bottleneck: at roughly 8,000 operations per sample, 100M samples is
 about 13 minutes per epoch single-threaded, so ten epochs is an evening.
