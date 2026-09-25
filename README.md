@@ -80,19 +80,34 @@ contribution is supplying a good first move to try, not its cutoffs.
 **What each feature is worth, measured.** Self-play SPRT at fixed 20,000 nodes per
 move, exact GSPRT with the pentanomial pair model:
 
-| Feature | Elo | Games | Status |
+Every row below was measured by SPRT against the same build with the feature
+switched off, on a frozen jar, and audited clean by `strix.tools.LogAudit`.
+
+| Feature | Elo | Games | Verdict |
 |---|---|---|---|
-| **Transposition table** | **+147.2** | 50 | **re-measured, clean** |
-| **Late move reductions** | **+68.2** | 98 | **measured, clean** |
-| **Principal variation search** | **+26.1** | 746 | **measured, clean** |
-| Null move pruning | **+2.0, rejected** | 2,066 | measured, clean |
-| Futility + late move pruning | **-19.2, rejected** | 362 | measured, clean |
-| Aspiration windows | **-33.9, rejected** | 154 | measured, clean |
-| Piece-square tables | +544.7 | 24 | pre-fix, 24 distinct |
-| Move ordering | +246.6 | 208 | pre-fix, 96 distinct |
+| Piece-square tables | **+683.0** | 26 | H1 |
+| Move ordering | **+559.2** | 26 | H1 |
+| Transposition table | **+147.2** | 50 | H1 |
+| Late move reductions | **+68.2** | 98 | H1 |
+| Principal variation search | **+26.1** | 746 | H1 |
+| Null move pruning | **+2.0, rejected** | 2,066 | could not be shown positive |
+| Futility + late move pruning | **-19.2, rejected** | 362 | H0 |
+| Aspiration windows | **-33.9, rejected** | 154 | H0 |
 | Magic bitboards | +31% nps, 0 Elo by design | n/a | |
-| **Texel tuning** | **-57.6, rejected** | 560 | pre-fix, 96 distinct |
-| **NNUE** | **-330.5, rejected** | 104 | pre-fix, 96 distinct |
+
+Not yet re-measured, and still carrying pre-fix numbers:
+
+| | Elo as recorded | Games recorded | Games that were distinct |
+|---|---|---|---|
+| **Texel tuning** | **-57.6, rejected** | 560 | 96 |
+| **NNUE** | **-330.5, rejected** | 104 | 96 |
+
+**The old numbers were wrong in both directions.** The transposition table was
+recorded at +33.5 and measures **+147.2**; move ordering at +246.6 and measures
+**+559.2**; piece-square tables at +544.7 and measure **+683.0**. Every one is an
+understatement, because the old runs replayed a 48-game sample instead of playing
+different games, and a replayed sample is both overconfident and, when the
+replayed games happen to be unrepresentative, wrong about the size.
 
 **Rows marked "pre-fix" are not evidence yet.** The harness drew openings as
 `pairIndex % 48` against a 48-line book, and the search is deterministic at a
