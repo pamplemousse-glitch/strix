@@ -53,16 +53,27 @@ public final class Search {
     public boolean usePvs = true;
 
     /**
-     * Null move pruning. Switchable so the harness can measure it.
-     * See ADR 0020.
+     * Null move pruning. OFF by default: it could not be measured positive.
+     *
+     * Measured at 20,000 nodes against the same build with the flag off:
+     * **+2.0 Elo over 2,066 games**, with the LLR at -1.08 and heading for H0 at
+     * bounds [0, 10]. That is not a gain, it is a coin.
+     *
+     * Kept behind a flag rather than deleted, because the reason it fails is
+     * specific and may not survive a better evaluation. See ADR 0020.
      */
-    public boolean useNullMove = true;
+    public boolean useNullMove = false;
 
-    /** Late move pruning. Switchable so the harness can measure it. See ADR 0023. */
-    public boolean useLmp = true;
+    /**
+     * Late move pruning. OFF by default: it measured negative. See ADR 0023.
+     *
+     * Measured together with futility at 20,000 nodes: **-19.2 Elo**, H0 after
+     * 362 games at bounds [0, 20].
+     */
+    public boolean useLmp = false;
 
-    /** Futility pruning. Switchable so the harness can measure it. See ADR 0023. */
-    public boolean useFutility = true;
+    /** Futility pruning. OFF by default, measured with LMP above. See ADR 0023. */
+    public boolean useFutility = false;
 
     /** Neither shallow pruning applies above this depth. */
     private static final int SHALLOW_PRUNE_MAX_DEPTH = 4;

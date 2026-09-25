@@ -85,6 +85,8 @@ move, exact GSPRT with the pentanomial pair model:
 | **Transposition table** | **+147.2** | 50 | **re-measured, clean** |
 | **Late move reductions** | **+68.2** | 98 | **measured, clean** |
 | **Principal variation search** | **+26.1** | 746 | **measured, clean** |
+| Null move pruning | **+2.0, rejected** | 2,066 | measured, clean |
+| Futility + late move pruning | **-19.2, rejected** | 362 | measured, clean |
 | Aspiration windows | **-33.9, rejected** | 154 | measured, clean |
 | Piece-square tables | +544.7 | 24 | pre-fix, 24 distinct |
 | Move ordering | +246.6 | 208 | pre-fix, 96 distinct |
@@ -113,12 +115,23 @@ wrong in both directions at once: inflated eightfold in confidence, and far too
 small in magnitude, because it was measuring 48 games over and over instead of
 385 different ones.
 
-**Aspiration windows are in the table because they lost.** The implementation
-passes its proof gates, and it still cost 33.9 Elo at this node count: the saving
-is fewer nodes per iteration, the cost is a full re-search whenever the window
-guess is wrong, and at 20k nodes the score is still moving between iterations. It
-ships off, behind a flag. A feature does not ship because the textbook says it
-should work.
+**Half the search toolkit lost, and the split is not random.**
+[ADR 0018](docs/adr/0018-three-search-heuristics-that-lost.md) has the detail.
+The short version: the two that won bet on *move ordering*, and the three that
+lost bet on the *evaluation*.
+
+Futility prunes when the static score plus a margin misses alpha. Null move
+trusts the score a reduced search returns. Aspiration assumes this iteration's
+score lands near the last one's. All three ask the evaluation function a
+question, and this engine evaluates with piece-square tables whose one tuning
+attempt was measured at -57.6 Elo and rejected.
+
+So roughly half the standard search toolkit is unavailable here until the
+evaluation improves. That is a larger argument for a working NNUE than the net's
+own Elo ever was.
+
+All three ship off, behind flags. A feature does not ship because the textbook
+says it should work.
 
 Measurements run against a frozen jar via `ops/measure`, because the harness
 launches engines from a classpath and recompiling mid-run silently swaps the
@@ -353,6 +366,7 @@ Each ADR records what else was considered and what the choice cost.
 - [0015](docs/adr/0015-seek-rated-games.md) The bot challenges, it does not wait
 - [0016](docs/adr/0016-openings-must-not-repeat.md) A replayed game is not a second observation
 - [0017](docs/adr/0017-quiescence-and-the-missing-move.md) The engine returned no move, and quiescence is why
+- [0018](docs/adr/0018-three-search-heuristics-that-lost.md) Three search heuristics that lost, and what they had in common
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.

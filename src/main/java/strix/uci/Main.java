@@ -60,10 +60,10 @@ public final class Main {
                     out("option name Hash type spin default 64 min 0 max 1024");
                     out("option name Ordering type check default true");
                     out("option name Pvs type check default true");
-                    out("option name NullMove type check default true");
+                    out("option name NullMove type check default false");
                     out("option name Aspiration type check default false");
                     out("option name Lmr type check default true");
-                    out("option name ShallowPruning type check default true");
+                    out("option name ShallowPruning type check default false");
                     out("option name Quiescence type check default true");
                     out("option name Eval type combo default psqt var psqt var material");
                     out("option name NetFile type string default <empty>");
