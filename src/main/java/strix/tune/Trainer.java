@@ -1,6 +1,7 @@
 package strix.tune;
 
 import strix.core.*;
+import strix.eval.Material;
 import strix.nnue.Network;
 
 import java.io.IOException;
@@ -108,7 +109,7 @@ public final class Trainer {
     private static final float FEATURE_CLIP = 0.09f;
 
     /** Sparse: the active feature indices for each perspective, plus the target. */
-    private record Sample(int[] own, int[] opp, float target) {}
+    record Sample(int[] own, int[] opp, float target) {}
 
     public static void main(String[] args) throws Exception {
         // Flags are scanned out first so they can appear anywhere, which matters
@@ -130,6 +131,7 @@ public final class Trainer {
 
         List<Tagged> all = load(data);
         System.out.printf("loaded %,d samples%n", all.size());
+        checkLabelSign(data);
 
         Split split = splitByGame(all);
 
@@ -217,7 +219,7 @@ public final class Trainer {
     }
 
     /** Forward, backward, update. Returns the squared error for this sample. */
-    private static double step(Network net, Adam adam, Sample s) {
+    static double step(Network net, Adam adam, Sample s) {
         float[] own = new float[Network.HIDDEN];
         float[] opp = new float[Network.HIDDEN];
         System.arraycopy(net.featureBias(), 0, own, 0, Network.HIDDEN);
@@ -240,22 +242,77 @@ public final class Trainer {
         // d(loss)/d(sum) for loss = (pred - target)^2 with pred = sigmoid(sum)
         float dSum = 2f * diff * pred * (1f - pred);
 
-        adam.outputBias(net, dSum);
+        // Backprop reads the FORWARD-pass output weights, so every gradient is
+        // computed before any of them is touched. Interleaving the two let the
+        // hidden-layer gradient read a weight Adam had already moved, which
+        // adds a constant -LR*|dSum| to all 256 units. Harmless at 1e-4 and
+        // sign-flipping for 6 of 24 units at 0.02, i.e. it becomes a first-order
+        // bug the moment the rate is raised.
         float[] dOwn = new float[Network.HIDDEN];
         float[] dOpp = new float[Network.HIDDEN];
         for (int h = 0; h < Network.HIDDEN; h++) {
-            adam.outputWeight(net, h, dSum * aOwn[h]);
-            adam.outputWeight(net, Network.HIDDEN + h, dSum * aOpp[h]);
             // Clipped ReLU passes no gradient outside [0, 1].
             dOwn[h] = (own[h] > 0f && own[h] < 1f) ? dSum * net.outputWeight(h) : 0f;
             dOpp[h] = (opp[h] > 0f && opp[h] < 1f) ? dSum * net.outputWeight(Network.HIDDEN + h) : 0f;
         }
 
+        adam.outputBias(net, dSum);
+        for (int h = 0; h < Network.HIDDEN; h++) {
+            adam.outputWeight(net, h, dSum * aOwn[h]);
+            adam.outputWeight(net, Network.HIDDEN + h, dSum * aOpp[h]);
+        }
         for (int h = 0; h < Network.HIDDEN; h++) adam.featureBias(net, h, dOwn[h] + dOpp[h]);
-        for (int f : s.own()) adam.featureRow(net, f, dOwn);
-        for (int f : s.opp()) adam.featureRow(net, f, dOpp);
 
+        applyFeatureRows(net, adam, s, dOwn, dOpp);
         return diff * diff;
+    }
+
+    /**
+     * One optimiser step per feature row, even when a feature is in both
+     * perspectives.
+     *
+     * The own and opp index sets overlap, and heavily: every mirrored same-type
+     * pair (Ra1/Ra8, a2/a7, castled kings) lands on one index in one set and the
+     * other index in the other. Measured on real positions, the starting
+     * position shares ALL 32 of its features, Kiwipete shares 12 of 32, and a
+     * pawn endgame shares none.
+     *
+     * Such a feature has one true gradient, dOwn + dOpp. Calling the optimiser
+     * twice is not the same thing, because Adam normalises each half separately:
+     * the applied step came out between 0.19x and 2.34x the intended size, and
+     * where the halves nearly cancel, which is exactly what a well-trained net
+     * looks like, the sign of what is left is arbitrary. Measured on the
+     * starting position: 224 of 224 sampled weights moved by the wrong amount.
+     *
+     * The features that overlap are the kings, rooks and pawns. The material
+     * features.
+     */
+    private static void applyFeatureRows(Network net, Adam adam, Sample s,
+                                         float[] dOwn, float[] dOpp) {
+        int[] own = s.own(), opp = s.opp();
+        boolean[] oppHandled = new boolean[opp.length];
+        float[] combined = null;
+
+        for (int f : own) {
+            int j = indexOf(opp, f);
+            if (j < 0) {
+                adam.featureRow(net, f, dOwn);
+                continue;
+            }
+            oppHandled[j] = true;
+            if (combined == null) combined = new float[Network.HIDDEN];
+            for (int h = 0; h < Network.HIDDEN; h++) combined[h] = dOwn[h] + dOpp[h];
+            adam.featureRow(net, f, combined);
+        }
+        for (int j = 0; j < opp.length; j++) {
+            if (!oppHandled[j]) adam.featureRow(net, opp[j], dOpp);
+        }
+    }
+
+    /** Linear scan; both arrays hold at most 32 entries. */
+    private static int indexOf(int[] array, int value) {
+        for (int i = 0; i < array.length; i++) if (array[i] == value) return i;
+        return -1;
     }
 
     private static double squaredError(Network net, Sample s) {
@@ -355,7 +412,7 @@ public final class Trainer {
     }
 
     /** Adam, one moment pair per parameter. */
-    private static final class Adam {
+    static final class Adam {
         private final float[][] mFeature = new float[Network.INPUTS][Network.HIDDEN];
         private final float[][] vFeature = new float[Network.INPUTS][Network.HIDDEN];
         private final float[] mBias = new float[Network.HIDDEN];
@@ -445,6 +502,72 @@ public final class Trainer {
             System.out.printf("skipped %,d in check, %,d unparseable%n", inCheck, unparseable);
         }
         return out;
+    }
+
+    /**
+     * Refuses a dataset whose labels are not side-to-move relative.
+     *
+     * This is the check that would have saved the second NNUE attempt.
+     *
+     * The network is side-to-move relative: {@link Network#featureIndex} maps
+     * own pieces to 0-383 and enemy pieces to 384-767 with the board mirrored,
+     * so its input is IDENTICAL for a position and its colour-flipped twin.
+     * Nothing in the input says who is White.
+     *
+     * Lichess publishes centipawns WHITE-relative. Train on those directly and
+     * the expected target for a given own-advantage a is
+     * {@code 0.5*sigmoid(a) + 0.5*(1-sigmoid(a)) = 0.5} exactly: material is not
+     * hard to learn, it is analytically cancelled. Measured on the offending
+     * file, the correlation between white material and the label was +0.70 for
+     * BOTH sides to move, where a correct file gives +0.88 and -0.88.
+     *
+     * The resulting net reached a validation loss 6% better than predicting a
+     * constant, could not tell a queen up from a queen down, and lost 26-0.
+     * See ADR 0021.
+     *
+     * Material is the cheapest probe available: any sane evaluation correlates
+     * strongly with it, so a weak or negative correlation means the labels are
+     * not describing the position the network is being shown.
+     */
+    private static void checkLabelSign(Path data) throws IOException {
+        Material material = new Material();
+        List<double[]> pairs = new ArrayList<>();
+
+        try (var reader = Files.newBufferedReader(data, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null && pairs.size() < 20_000) {
+                Dataset.Row row = Dataset.parse(line);
+                if (row == null) continue;
+                try {
+                    Board b = Fen.parse(row.fen());
+                    pairs.add(new double[]{material.evaluate(b), Integer.parseInt(row.label())});
+                } catch (Exception ignored) { }
+            }
+        }
+        if (pairs.size() < 100) return;
+
+        int n = pairs.size();
+        double mx = pairs.stream().mapToDouble(v -> v[0]).average().orElse(0);
+        double my = pairs.stream().mapToDouble(v -> v[1]).average().orElse(0);
+        double num = 0, dx = 0, dy = 0;
+        for (double[] v : pairs) {
+            num += (v[0] - mx) * (v[1] - my);
+            dx += (v[0] - mx) * (v[0] - mx);
+            dy += (v[1] - my) * (v[1] - my);
+        }
+        double r = (dx > 0 && dy > 0) ? num / Math.sqrt(dx * dy) : 0;
+        System.out.printf("label check: corr(side-to-move material, label) = %+.3f%n", r);
+
+        if (r < 0.3) {
+            System.out.printf("%nREFUSING TO TRAIN.%n");
+            System.out.printf("Labels do not describe the position the network is shown.%n");
+            System.out.printf("A correct dataset gives roughly +0.7 to +0.9 here.%n%n");
+            System.out.printf("The usual cause is WHITE-relative labels. This network is%n");
+            System.out.printf("side-to-move relative and cannot see which side is White, so%n");
+            System.out.printf("white-relative labels cancel material exactly. Negate the score%n");
+            System.out.printf("when the side to move is black. See ADR 0021.%n");
+            System.exit(2);
+        }
     }
 
     /**
@@ -603,7 +726,7 @@ public final class Trainer {
         System.out.printf("Either way this is a proxy. Only SPRT decides. See ADR 0013.%n");
     }
 
-    private static Sample toSample(Board b, int cp) {
+    static Sample toSample(Board b, int cp) {
         int stm = b.sideToMove;
         int[] own = new int[32], opp = new int[32];
         int n = 0;

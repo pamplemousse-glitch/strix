@@ -87,6 +87,27 @@ def main():
                     except ValueError:
                         continue
 
+                    # THE LABEL SIGN, and getting this wrong silently destroys
+                    # the entire dataset.
+                    #
+                    # Lichess publishes cp WHITE-relative. The network is
+                    # SIDE-TO-MOVE relative: Network.featureIndex maps own
+                    # pieces to 0-383 and enemy pieces to 384-767 with the board
+                    # mirrored, so its input is IDENTICAL for a position and its
+                    # colour-flipped twin. There is no input bit telling it who
+                    # is White.
+                    #
+                    # Feed it white-relative labels and the expected target for
+                    # a given own-advantage a is
+                    #     0.5*sigmoid(a) + 0.5*(1-sigmoid(a)) = 0.5
+                    # exactly. Material is not merely hard to learn, it is
+                    # analytically cancelled. That is how a net trained on 2M
+                    # games reached a validation loss 6% better than predicting
+                    # a constant and could not tell a queen up from a queen
+                    # down. See ADR 0021.
+                    if stm == "b":
+                        cp = -cp
+
                     buf.append((fen, cp))
                     kept += 1
 
