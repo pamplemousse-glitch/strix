@@ -85,11 +85,13 @@ public final class Main {
                 Thread.sleep(1000);
             }
 
+            // One snapshot for every line below, so the verdict and the count
+            // that supposedly produced it cannot disagree.
             Coordinator.Status s = c.status();
-            System.out.printf("%nverdict: %s after %d games%n", s.verdict(), c.sprt().gameCount());
+            System.out.printf("%nverdict: %s after %d games%n", s.verdict(), s.games());
             System.out.printf("baseline is %+.1f Elo vs candidate%n", s.elo());
-            System.out.printf("%d duplicate results dropped, %d leases expired%n",
-                    s.duplicates(), s.expired());
+            System.out.printf("%d duplicate results dropped, %d leases expired, %d late%n",
+                    s.duplicates(), s.expired(), s.late());
         }
     }
 

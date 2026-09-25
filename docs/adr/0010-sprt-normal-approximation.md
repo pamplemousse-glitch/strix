@@ -1,7 +1,13 @@
 # ADR 0010: SPRT via the normal approximation, with a minimum sample guard
 
 **Date:** 2026-09-16
-**Status:** accepted, with a known better target
+**Status:** SUPERSEDED. The migration described at the bottom was carried out the
+same day. `strix.harness.Gsprt` now computes the exact GSPRT and `Sprt` delegates
+to it; the normal approximation is gone from the codebase. Every Elo figure in the
+README was produced by the exact form.
+
+This record is kept because the reasoning that led to the wrong choice, and the
+bug it caused, are the point of it.
 
 ## What I chose
 SPRT with the pentanomial pair model, LLR computed by the **normal
@@ -48,8 +54,20 @@ formula, not a general property of the test.
 
 The approximation is also less accurate near the bounds than the exact form.
 
-## Migration path
+## Migration path, and what happened when it was taken
 Port the exact GSPRT from the reference implementation. The synthetic test in
 `SprtTest` is what makes that safe: it feeds results from a simulated player of
 known strength and checks the verdict and its rate. That test caught the billion
 LLR bug and would catch a botched port the same way.
+
+**Done, and it caught a second bug immediately.** The exact form removed the
+divide-by-zero-variance failure and introduced its own: with two pairs the
+observed mass sits in one or two buckets, and there may be no distribution on that
+support with the hypothesised mean, so the root find runs to the edge of its
+bracket and returns nonsense. An engine losing at -88.7 Elo produced an LLR of
+**+15.71**. Fixed with a Jeffreys prior of 0.5 pseudo-counts per bucket, which
+guarantees full support.
+
+The generalisable lesson is that **small samples were the hazard in both
+formulations**, and the same synthetic test found both. `MIN_PAIRS` was not the
+real defence; the known-strength simulation was.

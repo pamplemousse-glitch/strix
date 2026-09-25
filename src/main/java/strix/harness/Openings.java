@@ -1,5 +1,13 @@
 package strix.harness;
 
+import strix.core.Board;
+import strix.core.Fen;
+import strix.core.GameResult;
+import strix.core.Move;
+import strix.core.MoveGen;
+
+import java.util.SplittableRandom;
+
 import java.util.List;
 
 /**
@@ -84,4 +92,89 @@ public final class Openings {
 
     public static int size() { return BOOK.size(); }
     public static String get(int i) { return BOOK.get(Math.floorMod(i, BOOK.size())); }
+
+    /**
+     * How many extra plies a pair on cycle {@code c} gets. Cycle 0 is the plain book.
+     *
+     * Two or four, alternating, and deliberately not more. Random plies unbalance
+     * the position, and while the colour swap inside a pair cancels that on
+     * average, a wildly lost position measures how well both engines convert a
+     * win rather than which is stronger. Two plies already give roughly 30x30
+     * continuations per book line, far more diversity than any run needs.
+     */
+    private static int extraPlies(int cycle) {
+        return cycle == 0 ? 0 : (cycle % 2 == 1 ? 2 : 4);    // 0, 2, 4, 2, 4, ...
+    }
+
+    /**
+     * The opening line for a pair index, diversified past the end of the book.
+     *
+     * <h2>Why this exists</h2>
+     * The harness asked for {@code p % size()} and the search is deterministic at
+     * a fixed node count, so pair 0 and pair 48 played the <em>identical</em>
+     * game. Every run past 48 pairs was replaying the same 48 games and recording
+     * each replay as a fresh observation.
+     *
+     * Measured in the shipped logs: {@code texel-sprt.tsv} has 280 pairs and 48
+     * distinct (opening, bucket, result) triples. {@code hash-tight.tsv} has 385
+     * pairs and 48. Not "mostly similar": byte-identical, every time.
+     *
+     * The LLR is linear in the bucket counts, so replicating the sample k times
+     * multiplies the LLR by k while adding no information. The test then crosses
+     * a bound with probability approaching 1 for any target past the book size,
+     * in whichever direction those 48 games happen to lean. The alpha and beta
+     * guarantees are void past that point, not merely weakened.
+     *
+     * <h2>The fix, and why not simply a bigger book</h2>
+     * A bigger book is the better answer and is not mutually exclusive with this
+     * one, but it only moves the ceiling: 500 openings still caps a run at 500
+     * pairs. This removes the ceiling.
+     *
+     * Each cycle past the first extends the book line by 2, 4 or 6 uniformly
+     * random legal plies, seeded from the pair index. Seeded from the pair index
+     * is the load-bearing part: two workers computing the same pair still produce
+     * the identical result, which is what ADR 0011 and the cluster's duplicate
+     * dropping both depend on.
+     *
+     * Random plies unbalance the position, and that is fine here for the reason
+     * pairs exist at all: both engines play it from both sides, so the imbalance
+     * lands on each of them exactly once and cancels in the pair score.
+     */
+    public static String lineFor(int pairIndex) {
+        String base = get(pairIndex);
+        int cycle = Math.floorDiv(pairIndex, BOOK.size());
+        int extra = extraPlies(cycle);
+        if (extra == 0) return base;
+
+        Board board = Fen.parse(Fen.START);
+        StringBuilder line = new StringBuilder(base);
+        for (String u : base.trim().split("\\s+")) {
+            int m = resolve(board, u);
+            if (m == Move.NONE) return base;      // book line is broken; leave it alone
+            board.make(m);
+        }
+
+        // Mixed with a 64-bit odd constant so neighbouring pair indices do not
+        // produce neighbouring move choices.
+        SplittableRandom rng = new SplittableRandom(0x9E3779B97F4A7C15L * (pairIndex + 1));
+        int[] moves = new int[MoveGen.MAX_MOVES];
+        int[] scratch = new int[MoveGen.MAX_MOVES];
+
+        for (int i = 0; i < extra; i++) {
+            int n = MoveGen.generateLegal(board, moves, scratch);
+            if (n == 0) break;                    // mated or stalemated; stop here
+            int chosen = moves[rng.nextInt(n)];
+            board.make(chosen);
+            line.append(' ').append(Move.toUci(chosen));
+            if (GameResult.of(board).isOver()) break;
+        }
+        return line.toString();
+    }
+
+    private static int resolve(Board b, String uci) {
+        int[] m = new int[MoveGen.MAX_MOVES];
+        int n = MoveGen.generateLegal(b, m, new int[MoveGen.MAX_MOVES]);
+        for (int i = 0; i < n; i++) if (Move.toUci(m[i]).equals(uci)) return m[i];
+        return Move.NONE;
+    }
 }

@@ -51,8 +51,12 @@ public final class SelfPlay {
         AtomicInteger written = new AtomicInteger();
         Object lock = new Object();
 
+        // TRUNCATE, not APPEND. Game ids restart at 1 every run, so appending a
+        // second run onto the first gave two unrelated games the same id, and
+        // both Trainer and Texel then merged them into one group. It also
+        // silently doubled the file, which reads as "I generated more data".
         try (BufferedWriter w = Files.newBufferedWriter(out, StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
             Thread[] workers = new Thread[threads];
             for (int t = 0; t < threads; t++) {
@@ -67,7 +71,7 @@ public final class SelfPlay {
                     while (true) {
                         int n = played.incrementAndGet();
                         if (n > games) return;
-                        int lines = playOne(search, rng, buf);
+                        int lines = playOne(search, rng, buf, n);
                         synchronized (lock) {
                             try { w.write(buf.toString()); } catch (Exception ignored) { }
                         }
@@ -85,7 +89,7 @@ public final class SelfPlay {
         System.out.printf("done: %d games, %,d positions -> %s%n", games, written.get(), out);
     }
 
-    private static int playOne(Search search, SplittableRandom rng, StringBuilder out) {
+    private static int playOne(Search search, SplittableRandom rng, StringBuilder out, int gameId) {
         Board board = Fen.parse(Fen.START);
         String opening = Openings.get(rng.nextInt(Openings.size()));
         for (String u : opening.trim().split("\\s+")) {
@@ -131,7 +135,11 @@ public final class SelfPlay {
             case BLACK_WINS -> "0.0";
             default -> "0.5";
         };
-        for (String fen : fens) out.append(fen).append(" | ").append(label).append('\n');
+        // The game id is what lets a holdout split keep a game whole. Positions
+        // from one game share a result label and a pawn structure, so splitting
+        // across them puts near-duplicates of the training data in the validation
+        // set. See Dataset.
+        for (String fen : fens) out.append(Dataset.format(fen, label, gameId)).append('\n');
         return fens.size();
     }
 

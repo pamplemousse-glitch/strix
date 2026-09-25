@@ -4,7 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import strix.core.*;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * The incremental hash must always equal the from-scratch hash.
@@ -60,23 +60,50 @@ class ZobristTest {
     }
 
     /**
-     * Deliberately NOT a transposition, and a good illustration of why.
+     * An en passant square that nobody can use is not part of the position.
      *
-     * 1.e4 e5 2.Nf3 and 1.Nf3 e5 2.e4 have identical piece placement, but in the
-     * second White just played a double pawn push, so the en passant square is e3
-     * and in the first it is empty. Different positions, correctly different hashes.
+     * 1.Nf3 e5 2.e4 and 1.e4 e5 2.Nf3 reach identical piece placement. The second
+     * ends on a double pawn push, so the naive rule records an ep square of e3 and
+     * gives the two different hashes.
      *
-     * Strong engines refine this by hashing the en passant square only when an
-     * enemy pawn can actually capture there, which recovers these as real
-     * transpositions. That is a measurable optimization and so it waits for Stage 3.
+     * But no black pawn stands on d4 or f4, so that capture does not exist, and
+     * under FIDE rules these are the same position. This test used to assert the
+     * naive behaviour with a note that the refinement "waits for Stage 3". It
+     * arrived: Board.make now claims an ep square only when an enemy pawn is
+     * placed to take it.
+     *
+     * The refinement is not only an optimization. Hashing a right that cannot be
+     * exercised splits one position into two keys, and a threefold repetition
+     * spanning the split is never counted.
      */
-    @Test @DisplayName("Same pieces, different en passant rights, different hash")
-    void enPassantRightsAffectIdentity() {
-        Board withEp = play("g1f3", "e7e5", "e2e4");
-        Board withoutEp = play("e2e4", "e7e5", "g1f3");
-        org.junit.jupiter.api.Assertions.assertNotEquals(withEp.hash, withoutEp.hash);
+    @Test @DisplayName("An unusable en passant square does not change identity")
+    void unusableEnPassantIsNotPartOfThePosition() {
+        Board viaPush = play("g1f3", "e7e5", "e2e4");
+        Board viaKnight = play("e2e4", "e7e5", "g1f3");
+        assertEquals(viaKnight.hash, viaPush.hash, "no black pawn can take on e3");
+        assertEquals(Square.NONE, viaPush.epSquare);
+        assertEquals(Zobrist.compute(viaPush), viaPush.hash);
+        assertEquals(Zobrist.compute(viaKnight), viaKnight.hash);
+    }
+
+    /**
+     * A usable one still does, which is the half that must not regress.
+     *
+     * After 1.e4 d5 2.e5 f5 the black f-pawn lands beside the white e5 pawn, so
+     * exf6 e.p. is real. Drop the ep component here and the engine would treat a
+     * position where that capture is available as identical to one where it has
+     * expired, and take a transposition-table score for the wrong position.
+     */
+    @Test @DisplayName("A capturable en passant square does change identity")
+    void capturableEnPassantAffectsIdentity() {
+        Board withEp = play("e2e4", "d7d5", "e4e5", "f7f5");
+        assertNotEquals(Square.NONE, withEp.epSquare, "exf6 e.p. is available");
         assertEquals(Zobrist.compute(withEp), withEp.hash);
-        assertEquals(Zobrist.compute(withoutEp), withoutEp.hash);
+
+        // Same pieces, but reached so that the capture has already expired.
+        Board expired = play("e2e4", "d7d5", "e4e5", "f7f6", "g1f3", "f6f5", "f3g1");
+        assertEquals(Square.NONE, expired.epSquare);
+        assertNotEquals(withEp.hash, expired.hash, "one allows exf6 e.p., the other does not");
     }
 
     private static Board play(String... ucis) {

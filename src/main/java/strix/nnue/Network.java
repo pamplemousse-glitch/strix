@@ -51,6 +51,20 @@ public final class Network {
     public static final float SCALE = 400f;
 
     /**
+     * Every learnable number in the network.
+     *
+     * Exposed because it is half of the one check that would have stopped the
+     * first NNUE run before it cost a day: independent training samples divided
+     * by parameters. That ratio was 0.8. See ADR 0014 and {@code Trainer}.
+     */
+    public static int parameterCount() {
+        return INPUTS * HIDDEN   // feature weights
+                + HIDDEN         // feature bias
+                + HIDDEN * 2     // output weights, both perspectives
+                + 1;             // output bias
+    }
+
+    /**
      * Feature index for a piece, as seen from {@code perspective}.
      *
      * Own pieces land in 0-383 and enemy pieces in 384-767 regardless of which
@@ -126,6 +140,21 @@ public final class Network {
     public void adjustOutputBias(float delta) { outputBias += delta; }
     public void adjustOutputWeight(int i, float delta) { outputWeights[i] += delta; }
     public void adjustFeatureBias(int h, float delta) { featureBias[h] += delta; }
+
+    /**
+     * Hold a feature bias inside [0, 1], the clipped-ReLU window.
+     *
+     * The weights were clipped and the bias was not, though it is the term that
+     * shifts every unit bodily. It starts at 0.5, in the middle of the window,
+     * and nothing stopped it drifting out: a unit whose bias leaves [0, 1] is
+     * saturated for every input, the gradient through a clipped ReLU outside its
+     * window is exactly zero, and it can never come back. That is the death mode
+     * that cost 254 of 256 units and -249 Elo. See ADR 0014.
+     */
+    public void clipFeatureBias(int h, float lo, float hi) {
+        if (featureBias[h] < lo) featureBias[h] = lo;
+        else if (featureBias[h] > hi) featureBias[h] = hi;
+    }
     public void adjustFeatureWeight(int f, int h, float delta) { featureWeights[f][h] += delta; }
 
     /** Hold a feature weight inside +/- limit, so the accumulator cannot outgrow the activation. */

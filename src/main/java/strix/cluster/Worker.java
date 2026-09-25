@@ -63,7 +63,10 @@ public final class Worker implements AutoCloseable {
         this.goArgs = goArgs;
         this.timeoutMillis = timeoutMillis;
         this.maxPlies = maxPlies;
-        this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        this.http = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
     }
 
     /** Runs until the coordinator has nothing left to give. */
@@ -85,11 +88,24 @@ public final class Worker implements AutoCloseable {
                         id, played, dropped);
                 return;
             }
+            if (lease.unexpected()) {
+                // Used to fall straight through to parsing the body as a job,
+                // where Integer.parseInt(null) killed the worker. A 502 from a
+                // reverse proxy or a 302 from a captive portal is exactly the
+                // transient condition the retry loop exists to survive.
+                System.out.printf("%s: lease returned %d, waiting%n", id, lease.status());
+                Thread.sleep(RETRY_MILLIS);
+                continue;
+            }
 
             Map<String, String> job = parse(lease.body());
             String key = job.get("key");
-            int openingIndex = Integer.parseInt(job.get("opening"));
-            String opening = Openings.get(openingIndex);
+            // By pair index, not book index: past the end of the book the line is
+            // extended with plies seeded from the pair, so pair 0 and pair 48 are
+            // no longer the identical game. Still deterministic per pair, which is
+            // what the coordinator's duplicate dropping relies on. See Openings.
+            int pairIndex = Integer.parseInt(job.get("pair"));
+            String opening = Openings.lineFor(pairIndex);
 
             // Same opening, both colours, so the opening's own advantage cancels.
             Game.Outcome first = Game.play(a, b, opening, goArgs, timeoutMillis, maxPlies);
@@ -98,11 +114,28 @@ public final class Worker implements AutoCloseable {
             double scoreA = first.result().whiteScore() + (1.0 - second.result().whiteScore());
             int bucket = (int) Math.round(scoreA * 2);      // 0..4 in half-points
 
-            String reply = post("/result", "key " + key + "\nbucket " + bucket
+            Reply resultReply = postReply("/result", "key " + key + "\nbucket " + bucket
                     + "\ndetail " + first.result() + "/" + second.result() + "\n");
 
+            if (resultReply.unexpected()) {
+                // The status was discarded here, so a 400 or a 500 parsed as an
+                // acknowledgement with no "counted" key and the worker moved on
+                // with the pair unreported and nothing in the log. The retry
+                // loop inside send() only ever covered IOException.
+                System.err.printf("%s: /result returned %d for %s, retrying once%n",
+                        id, resultReply.status(), key);
+                Thread.sleep(RETRY_MILLIS);
+                resultReply = postReply("/result", "key " + key + "\nbucket " + bucket
+                        + "\ndetail " + first.result() + "/" + second.result() + "\n");
+                if (resultReply.unexpected()) {
+                    System.err.printf("%s: giving up on %s after %d%n",
+                            id, key, resultReply.status());
+                    continue;
+                }
+            }
+
             played++;
-            Map<String, String> ack = parse(reply);
+            Map<String, String> ack = parse(resultReply.body());
             if ("false".equals(ack.get("counted"))) {
                 dropped++;
                 System.out.printf("%s: %s was already counted, dropped%n", id, key);
@@ -129,15 +162,39 @@ public final class Worker implements AutoCloseable {
     record Reply(int status, String body) {
         boolean retryLater() { return status == 503; }
         boolean over()       { return status == 204; }
+        boolean ok()         { return status == 200; }
+
+        /**
+         * Anything else: a proxy's 502, a captive portal's 302, a 400 from a
+         * protocol mismatch. These were handled by neither branch, so a lease
+         * response fell through to parsing a body that was not a job and the
+         * worker died on NumberFormatException, and a result response was
+         * treated as an acknowledgement so the pair was silently never reported.
+         */
+        boolean unexpected() { return !ok() && !retryLater() && !over(); }
     }
+
+    /**
+     * Per-request deadline, which connectTimeout does not provide.
+     *
+     * connectTimeout covers the TCP handshake only. A connection that is
+     * accepted and then never answered (a laptop that slept leaving a half-open
+     * socket, or the coordinator's single-threaded executor blocked inside a
+     * slow write) left http.send blocked forever. `waited` never advanced, so
+     * the documented GIVE_UP_MILLIS could not fire and the worker hung silently
+     * for good, which is precisely the outcome its retry loop exists to prevent.
+     */
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(120);
 
     Reply get(String path) throws IOException, InterruptedException {
-        return send(HttpRequest.newBuilder(base.resolve(path)).GET().build(), "GET " + path);
+        return send(HttpRequest.newBuilder(base.resolve(path))
+                .timeout(REQUEST_TIMEOUT).GET().build(), "GET " + path);
     }
 
-    private String post(String path, String body) throws IOException, InterruptedException {
+    private Reply postReply(String path, String body) throws IOException, InterruptedException {
         return send(HttpRequest.newBuilder(base.resolve(path))
-                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), "POST " + path).body();
+                .timeout(REQUEST_TIMEOUT)
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), "POST " + path);
     }
 
     /**

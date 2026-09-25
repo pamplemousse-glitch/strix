@@ -47,6 +47,10 @@ public final class Perft {
      * disagree. Play that move and repeat one ply down.
      */
     public static String divide(Board b, int depth) {
+        // count() only terminates on depth == 0, so divide(b, 0) passed -1 and
+        // recursed off the end of buf.legal[MAX_PLY]. tools/Divide hands a
+        // user-supplied depth straight through.
+        if (depth <= 0) return "\nNodes searched: " + (depth == 0 ? 1 : 0) + "\n";
         Buffers buf = BUFFERS.get();
         int[] moves = buf.legal[0];
         int n = MoveGen.generateLegal(b, moves, buf.scratch[0]);

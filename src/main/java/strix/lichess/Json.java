@@ -36,10 +36,35 @@ final class Json {
         StringBuilder sb = new StringBuilder();
         while (end < json.length()) {
             char c = json.charAt(end);
-            if (c == '\\') { end += 2; continue; }
             if (c == '"') break;
-            sb.append(c);
-            end++;
+            if (c != '\\') { sb.append(c); end++; continue; }
+
+            // An escape used to be skipped with `end += 2` and nothing appended,
+            // so the escaped character was DELETED: {"text":"say \"hi\""} came
+            // back as `say hi`, and a unicode escape appended its four hex
+            // digits as literals. Harmless for the ASCII ids the bot reads,
+            // wrong for anything else, and wrong silently.
+            // (Written without the backslash-u spelling on purpose: javac
+            // expands unicode escapes inside comments too, and it does not
+            // compile.)
+            if (end + 1 >= json.length()) break;
+            char esc = json.charAt(end + 1);
+            switch (esc) {
+                case 'n' -> { sb.append('\n'); end += 2; }
+                case 't' -> { sb.append('\t'); end += 2; }
+                case 'r' -> { sb.append('\r'); end += 2; }
+                case 'b' -> { sb.append('\b'); end += 2; }
+                case 'f' -> { sb.append('\f'); end += 2; }
+                case 'u' -> {
+                    if (end + 5 < json.length()) {
+                        try {
+                            sb.append((char) Integer.parseInt(json.substring(end + 2, end + 6), 16));
+                            end += 6;
+                        } catch (NumberFormatException e) { sb.append(esc); end += 2; }
+                    } else { sb.append(esc); end += 2; }
+                }
+                default -> { sb.append(esc); end += 2; }   // \" \\ \/ and anything else
+            }
         }
         return sb.toString();
     }
@@ -53,9 +78,20 @@ final class Json {
         int p = colon + 1;
         while (p < json.length() && Character.isWhitespace(json.charAt(p))) p++;
         int start = p;
-        while (p < json.length() && (Character.isDigit(json.charAt(p)) || json.charAt(p) == '-')) p++;
+        if (p < json.length() && (json.charAt(p) == '-' || json.charAt(p) == '+')) p++;
+        while (p < json.length() && Character.isDigit(json.charAt(p))) p++;
+        int intEnd = p;
+        // Accept a fractional part rather than stopping at the dot and leaving
+        // the caller with a truncated integer. Lichess sends increments as
+        // whole numbers today, but "1.75" silently became 1.
+        boolean fractional = p < json.length() && json.charAt(p) == '.';
+        if (fractional) {
+            p++;
+            while (p < json.length() && Character.isDigit(json.charAt(p))) p++;
+        }
         try {
-            return Long.parseLong(json.substring(start, p));
+            if (fractional) return (long) Double.parseDouble(json.substring(start, p));
+            return Long.parseLong(json.substring(start, intEnd));
         } catch (Exception e) {
             return fallback;
         }
@@ -68,6 +104,16 @@ final class Json {
         if (i < 0) return null;
         int brace = json.indexOf('{', i);
         if (brace < 0) return null;
+
+        // The brace has to be THIS key's value. Searching forward for the next
+        // one meant that on a non-object value the search sailed into a later
+        // key's object: nested(challenge, "variant", "key") returned a field
+        // from "challenger" when "variant" happened to be a bare string.
+        int colon = json.indexOf(':', i);
+        if (colon < 0 || colon > brace) return null;
+        for (int p = colon + 1; p < brace; p++) {
+            if (!Character.isWhitespace(json.charAt(p))) return null;
+        }
         int depth = 0;
         for (int p = brace; p < json.length(); p++) {
             char c = json.charAt(p);

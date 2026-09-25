@@ -63,8 +63,21 @@ public final class Sprt {
         return new Sprt(0.0, 5.0, 0.05, 0.05);
     }
 
-    /** @param pairScore 0, 1, 2, 3 or 4, meaning 0 to 2 points in half-point steps. */
+    /**
+     * @param pairScore 0, 1, 2, 3 or 4, meaning 0 to 2 points in half-point steps.
+     *
+     * Checked rather than trusted. This is a bare array index reached from two
+     * places that parse untrusted text: a resumed log file, and an HTTP body
+     * posted by a worker that may be running a different build. An out-of-range
+     * value threw an AIOOBE that unwound through the coordinator, after the key
+     * had already been marked counted, so the observation was lost AND the run
+     * could never resume past that line.
+     */
     public void record(int pairScore) {
+        if (pairScore < 0 || pairScore >= pairs.length) {
+            throw new IllegalArgumentException(
+                    "pair score must be 0..4, got " + pairScore);
+        }
         pairs[pairScore]++;
     }
 

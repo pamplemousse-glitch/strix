@@ -3,7 +3,9 @@ package strix.search;
 import strix.core.Board;
 import strix.core.Move;
 import strix.core.MoveGen;
+import strix.core.Piece;
 import strix.eval.Evaluator;
+import strix.eval.Material;
 
 /**
  * Two searches that must always agree.
@@ -23,6 +25,15 @@ public final class Search {
 
     public static final int MATE = 30_000;
     public static final int INFINITY = 31_000;
+    /**
+     * Slack on delta pruning, in centipawns.
+     *
+     * Generous on purpose: this prunes on material alone and ignores positional
+     * compensation, so a tight margin would discard real sacrifices. Two pawns
+     * still removes the great majority of hopeless captures.
+     */
+    private static final int DELTA_MARGIN = 200;
+
     private static final int MAX_PLY = 64;
 
     private Evaluator evaluator;
@@ -86,13 +97,33 @@ public final class Search {
         // One legal move is not a decision. Play it and keep the clock.
         int[] rootMoves = moveBuf[0];
         int rootCount = MoveGen.generateLegal(board, rootMoves, scratch[0]);
+        if (rootCount == 0) {
+            // Mate or stalemate. NONE is the honest answer here, and the only
+            // place it is, which is why the fallback below can rely on
+            // rootMoves[0] existing.
+            bestMove = Move.NONE;
+            return 0;
+        }
         if (rootCount == 1) {
             bestMove = rootMoves[0];
             listener.onDepth(1, 0, 1, 0, bestMove);
             return 0;
         }
 
-        int completedMove = Move.NONE;
+        // A legal move from the very start. completedMove used to begin at NONE,
+        // and `if (stopped) break` discards the partial result, so an iteration 1
+        // that did not finish left bestMove = NONE. The Lichess bot then does
+        // `if (bestMove == NONE) return;`, never posts a move, never receives a
+        // new gameState, and sits on a healthy stream until it flags.
+        //
+        // Reproduced on Kiwipete with a fresh 3+2 clock: 7002 ms elapsed,
+        // bestMove NONE. That is the cause of the outoftime losses in ADR 0015,
+        // and it is the same silent shape as the dropped move POST by a
+        // different route.
+        //
+        // The first root move is not a good move. It is a legal one, and a legal
+        // move is worth infinitely more than no move.
+        int completedMove = rootMoves[0];
         int completedScore = 0;
         int stableFor = 0;
 
@@ -106,7 +137,10 @@ public final class Search {
             stableFor = (bestMove == completedMove) ? stableFor + 1 : 0;
             completedMove = bestMove;
             completedScore = score;
-            listener.onDepth(depth, score, nodes, System.currentTimeMillis() - start, completedMove);
+            // nodesThisMove, not nodes. `nodes` is reset at the top of every
+            // iteration while uci/Main divides by cumulative elapsed time, so
+            // the node count fell as depth rose and nps was understated.
+            listener.onDepth(depth, score, nodesThisMove, System.currentTimeMillis() - start, completedMove);
 
             // The answer stopped changing several iterations ago. Searching deeper
             // is unlikely to change it, and the clock is worth more elsewhere. This
@@ -139,6 +173,19 @@ public final class Search {
 
     private int negamax(Board board, int depth, int ply, boolean root) {
         nodes++;
+
+        // The same three draw rules alphaBeta applies. Without them the two
+        // searches were not computing the same function, so the invariant this
+        // whole class is built around ("if the scores ever differ, alpha-beta
+        // has a bug, full stop") was false and the reference could not be used
+        // as one. Measured before this: 4 of 150 random positions disagreed at
+        // depth 4, and removing only these three predicates from alphaBeta took
+        // the mismatch count to 0, which pins the cause exactly.
+        if (!root && (board.isRepetition(2) || board.isFiftyMoveDraw()
+                || board.isInsufficientMaterial())) {
+            return 0;
+        }
+
         int[] moves = moveBuf[ply];
         int n = MoveGen.generateLegal(board, moves, scratch[ply]);
 
@@ -183,16 +230,52 @@ public final class Search {
         if (stopped) return 0;
         if (ply >= MAX_PLY - 1) return evaluator.evaluate(board);
 
-        int standPat = evaluator.evaluate(board);
-        if (standPat >= beta) return beta;
-        if (standPat > alpha) alpha = standPat;
+        // Standing pat is claiming "I can just decline every capture", which a
+        // side in check cannot do. Without this the engine scores a checking
+        // sacrifice as plain material loss, because the forced reply is invisible
+        // to a capture-only search.
+        boolean inCheck = board.inCheck(board.sideToMove);
+
+        int standPat = -INFINITY;
+        if (!inCheck) {
+            standPat = evaluator.evaluate(board);
+            if (standPat >= beta) return beta;
+            if (standPat > alpha) alpha = standPat;
+        }
 
         int[] moves = moveBuf[ply];
-        int n = MoveGen.generateCaptures(board, moves, scratch[ply]);
+        int n = inCheck
+                ? MoveGen.generateLegal(board, moves, scratch[ply])
+                : MoveGen.generateCaptures(board, moves, scratch[ply]);
+
+        // In check with no legal move is mate, and it was previously reported as
+        // a stand-pat score. Only reachable on the in-check branch, because a
+        // quiet position with no captures is not a finished game.
+        if (inCheck && n == 0) return -MATE + ply;
+
         for (int i = 0; i < n; i++) {
+            // Ordered. Captures were searched in raw generation order, and at
+            // depth 1 every leaf inherits the root's beta of +INFINITY so
+            // standPat >= beta can never fire: no cutoff existed anywhere in the
+            // capture tree. Measured on Kiwipete, depth 1 cost 28.2 SECONDS and
+            // 28M nodes, against 2.0s for depth 2.
+            if (ordering != null) ordering.pickBest(board, moves, n, i, Move.NONE, ply);
+
+            // Delta pruning: if winning this piece outright still leaves us far
+            // below alpha, the capture cannot rescue the position. Skipped while
+            // in check, where every move must be examined.
+            if (!inCheck && standPat > -INFINITY) {
+                int victim = board.mailbox[Move.to(moves[i])];
+                int gain = (victim == Piece.NONE)
+                        ? Material.VALUE[Piece.QUEEN]   // en passant or promotion
+                        : Material.VALUE[Piece.typeOf(victim)];
+                if (standPat + gain + DELTA_MARGIN < alpha) continue;
+            }
+
             board.make(moves[i]);
             int score = -quiescence(board, -beta, -alpha, ply + 1);
             board.unmake(moves[i]);
+            if (stopped) return 0;
             if (score >= beta) return beta;
             if (score > alpha) alpha = score;
         }

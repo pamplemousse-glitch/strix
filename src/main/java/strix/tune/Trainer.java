@@ -33,12 +33,29 @@ import java.util.SplittableRandom;
  * common features or diverges on the rare ones.
  *
  * <h2>The holdout</h2>
- * A fifth of the data is never trained on, for the reason ADR 0013 records: a
- * falling training error is not a better evaluation. Unlike the Texel run, the
- * split here can be random, because each position carries its own independent
- * Stockfish label rather than a result shared with 32 of its neighbours.
+ * A fifth of the GAMES are never trained on, for the reason ADR 0013 records: a
+ * falling training error is not a better evaluation.
+ *
+ * An earlier version split randomly by position and argued that was safe, because
+ * each position carries its own independent Stockfish label rather than a result
+ * shared with 32 of its neighbours. The labels are indeed independent. The
+ * positions are not. Two positions from one game are a couple of moves apart and
+ * share a pawn structure and a piece set, so a random split drops near-duplicates
+ * of the training data into the validation set.
+ *
+ * The holdout was therefore measuring "can it evaluate positions it has almost
+ * already seen", passed easily, and said nothing about the engine. Measured:
+ * 0.0086 held-out loss, the lowest ever recorded here, at -249 Elo. See ADR 0014.
  */
 public final class Trainer {
+
+    /**
+     * Independent samples per parameter, below which training is refused.
+     *
+     * 10x is the conventional floor and 100x is comfortable. The first NNUE run
+     * was at 0.8x. See ADR 0014.
+     */
+    private static final int MIN_RATIO = 10;
 
     private static final float LR = 0.003f;
     private static final float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
@@ -70,19 +87,60 @@ public final class Trainer {
     private record Sample(int[] own, int[] opp, float target) {}
 
     public static void main(String[] args) throws Exception {
-        Path data = Path.of(args.length > 0 ? args[0] : "runs/labelled.txt");
-        Path out = Path.of(args.length > 1 ? args[1] : "runs/net.bin");
-        int epochs = args.length > 2 ? Integer.parseInt(args[2]) : 30;
+        // Flags are scanned out first so they can appear anywhere, which matters
+        // because the positional arguments already have defaults and people reach
+        // for the flag without supplying the ones before it.
+        boolean force = false, wantCurve = false;
+        List<String> pos = new ArrayList<>();
+        for (String a : args) {
+            switch (a) {
+                case "--force" -> force = true;
+                case "--curve" -> wantCurve = true;
+                default -> pos.add(a);
+            }
+        }
 
-        List<Sample> all = load(data);
+        Path data = Path.of(pos.size() > 0 ? pos.get(0) : "runs/labelled.txt");
+        Path out = Path.of(pos.size() > 1 ? pos.get(1) : "runs/net.bin");
+        int epochs = pos.size() > 2 ? Integer.parseInt(pos.get(2)) : 30;
+
+        List<Tagged> all = load(data);
         System.out.printf("loaded %,d samples%n", all.size());
 
+        Split split = splitByGame(all);
+
+        // Independent samples are games, not positions. Checked before any
+        // training happens, because this is the number that decided the outcome
+        // of both previous attempts and it costs nothing to look at.
+        checkRatio(split, force);
+        System.out.println();
+
+        if (wantCurve) {
+            curve(split, epochs);
+            return;
+        }
+
+        Result r = trainOnce(split.train(), split.validate(), epochs, true);
+        r.net().save(out);
+        System.out.printf("%nbest validation loss: %.6f%n", r.loss());
+        System.out.println("wrote " + out);
+        System.out.println("\nNOT VALIDATED. A lower loss is not a stronger engine.");
+        System.out.println("Run the SPRT harness before believing it. See ADR 0013.");
+    }
+
+    /** The best network found and the held-out loss that made it best. */
+    private record Result(Network net, double loss) {}
+
+    /**
+     * One training run to early stopping.
+     *
+     * Quiet mode exists for the scaling curve, which runs this four times and
+     * wants four numbers rather than four screens of epochs.
+     */
+    private static Result trainOnce(List<Sample> train, List<Sample> validate,
+                                    int epochs, boolean verbose) throws IOException {
         SplittableRandom rng = new SplittableRandom(0x5721A9C3L);
-        java.util.Collections.shuffle(all, new java.util.Random(12345));
-        int holdout = all.size() / 5;
-        List<Sample> validate = all.subList(0, holdout);
-        List<Sample> train = all.subList(holdout, all.size());
-        System.out.printf("train %,d   validate %,d%n%n", train.size(), validate.size());
+        List<Sample> shuffled = new ArrayList<>(train);
 
         Network net = Network.random(0xC0FFEE);
         // Start the units inside the activation window rather than at its edge, so
@@ -95,12 +153,12 @@ public final class Trainer {
         int worseStreak = 0;
 
         for (int epoch = 1; epoch <= epochs; epoch++) {
-            java.util.Collections.shuffle(train, new java.util.Random(rng.nextLong()));
+            java.util.Collections.shuffle(shuffled, new java.util.Random(rng.nextLong()));
             double loss = 0;
             long t0 = System.currentTimeMillis();
 
-            for (Sample s : train) loss += step(net, adam, s);
-            loss /= train.size();
+            for (Sample s : shuffled) loss += step(net, adam, s);
+            loss /= shuffled.size();
 
             double validation = 0;
             for (Sample s : validate) validation += squaredError(net, s);
@@ -111,26 +169,23 @@ public final class Trainer {
             // Live units are the health metric that actually matters here. A
             // falling loss with a dying network is the failure this whole run
             // exists to avoid repeating.
-            System.out.printf("epoch %2d  train %.6f  validate %.6f  live %d/%d %s (%ds)%n",
-                    epoch, loss, validation, liveUnits(net, validate.get(0)), Network.HIDDEN,
-                    better ? "" : "  <- worse", secs);
+            if (verbose) {
+                System.out.printf("epoch %2d  train %.6f  validate %.6f  live %d/%d %s (%ds)%n",
+                        epoch, loss, validation, liveUnits(net, validate.get(0)), Network.HIDDEN,
+                        better ? "" : "  <- worse", secs);
+            }
 
             if (better) {
                 bestValidation = validation;
                 best = copy(net);
                 worseStreak = 0;
             } else if (++worseStreak >= 3) {
-                System.out.println("\nheld-out loss rising for 3 epochs: stopping");
+                if (verbose) System.out.println("\nheld-out loss rising for 3 epochs: stopping");
                 break;
             }
         }
 
-        if (best == null) best = net;
-        best.save(out);
-        System.out.printf("%nbest validation loss: %.6f%n", bestValidation);
-        System.out.println("wrote " + out);
-        System.out.println("\nNOT VALIDATED. A lower loss is not a stronger engine.");
-        System.out.println("Run the SPRT harness before believing it. See ADR 0013.");
+        return new Result(best == null ? net : best, bestValidation);
     }
 
     private static float sigmoid(float x) {
@@ -250,6 +305,10 @@ public final class Trainer {
 
         void featureBias(Network net, int h, float grad) {
             net.adjustFeatureBias(h, -update(grad, mBias, vBias, h));
+            // Clipped for the same reason the weights are, and it was missing.
+            // A little headroom past the window so a unit sitting at the edge
+            // can still be pushed back in by its weights.
+            net.clipFeatureBias(h, -0.25f, 1.25f);
         }
 
         void featureRow(Network net, int f, float[] grads) {
@@ -262,18 +321,177 @@ public final class Trainer {
         }
     }
 
-    private static List<Sample> load(Path path) throws IOException {
-        List<Sample> out = new ArrayList<>();
+    /** A sample and the game it came from, so the holdout can keep games whole. */
+    private record Tagged(Sample sample, int gameId) {}
+
+    private static List<Tagged> load(Path path) throws IOException {
+        List<Tagged> out = new ArrayList<>();
         for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-            int bar = line.lastIndexOf('|');
-            if (bar < 0) continue;
+            Dataset.Row row = Dataset.parse(line);
+            if (row == null) continue;
             try {
-                Board b = Fen.parse(line.substring(0, bar).trim());
-                int cp = Integer.parseInt(line.substring(bar + 1).trim());
-                out.add(toSample(b, cp));
+                Board b = Fen.parse(row.fen());
+                int cp = Integer.parseInt(row.label());
+                out.add(new Tagged(toSample(b, cp), row.gameId()));
             } catch (Exception ignored) { }
         }
         return out;
+    }
+
+    /**
+     * Holds out a fifth of the GAMES, not a fifth of the positions.
+     *
+     * A random split by position was the original mistake and it is a quiet one:
+     * two positions from the same game are a couple of moves apart, so a held-out
+     * position sits right next to a trained-on one. The holdout then measures
+     * "can it evaluate positions it has almost already seen", which is a far
+     * easier question than the one it is supposed to answer, and it reports a
+     * healthy number while the engine is getting worse. Measured: 0.0086 held-out
+     * loss, the best ever recorded here, at -249 Elo. See ADR 0014.
+     */
+    /** Training set kept as whole games, plus the flat holdout. */
+    record Split(List<List<Sample>> trainGames, List<Sample> validate, int untagged) {
+        List<Sample> train() {
+            List<Sample> flat = new ArrayList<>();
+            for (List<Sample> g : trainGames) flat.addAll(g);
+            return flat;
+        }
+    }
+
+    private static Split splitByGame(List<Tagged> all) {
+        java.util.Map<Integer, List<Sample>> byGame = new java.util.LinkedHashMap<>();
+        int untagged = 0;
+        for (Tagged t : all) {
+            if (t.gameId() == Dataset.NO_GAME) untagged++;
+            // Untagged rows get a unique key so they behave like the old
+            // per-position split rather than collapsing into one giant "game".
+            int key = t.gameId() == Dataset.NO_GAME ? -(byGame.size() + 2) : t.gameId();
+            byGame.computeIfAbsent(key, k -> new ArrayList<>()).add(t.sample());
+        }
+
+        List<List<Sample>> games = new ArrayList<>(byGame.values());
+        java.util.Collections.shuffle(games, new java.util.Random(12345));
+
+        List<List<Sample>> trainGames = new ArrayList<>();
+        List<Sample> validate = new ArrayList<>();
+        int target = all.size() / 5;
+        int positions = 0;
+        for (List<Sample> game : games) {
+            if (validate.size() < target) validate.addAll(game);
+            else { trainGames.add(game); positions += game.size(); }
+        }
+        System.out.printf("%,d games -> train %,d positions in %,d games   validate %,d%n",
+                games.size(), positions, trainGames.size(), validate.size());
+        return new Split(trainGames, validate, untagged);
+    }
+
+    /**
+     * Refuses to train when there is less evidence than there are things to learn.
+     *
+     * Independent samples are GAMES, not positions. 198,014 positions drawn from
+     * 6,000 games is about 6,000 independent samples, because 33 positions from
+     * one game share a pawn structure and a piece set.
+     *
+     * The first NNUE run had 153,372 samples against 197,000 parameters, a ratio
+     * of 0.8: fewer examples than unknowns. That was computable before a line of
+     * training code ran, and nothing about the day spent on activation functions
+     * afterwards could have changed it. See ADR 0014.
+     *
+     * 10x is the floor and 100x is comfortable. Real NNUE training sits in that
+     * range, on hundreds of millions of positions.
+     */
+    private static void checkRatio(Split split, boolean force) {
+        int params = Network.parameterCount();
+
+        // An untagged row gets its own synthetic key above, so it counts as a
+        // one-position "game". Feeding that count to the ratio check turns a
+        // count of POSITIONS into a claimed count of independent samples, and
+        // overstates independence by about 33x: exactly the error this guardrail
+        // exists to catch. If any row lacks a game id, independence is unknown
+        // and the honest answer is to refuse rather than to guess.
+        if (split.untagged() > 0) {
+            System.out.printf("%n%,d rows carry no game id, so independent samples cannot be%n",
+                    split.untagged());
+            System.out.printf("counted. Positions from one game are not independent: 198,014%n");
+            System.out.printf("positions from 6,000 games is about 6,000 samples, not 198,014.%n%n");
+            System.out.printf("Regenerate with SelfPlay, which writes the id. See Dataset.%n");
+            if (!force) {
+                System.out.printf("%nREFUSING TO TRAIN. Pass --force to train anyway.%n");
+                System.exit(2);
+            }
+            System.out.printf("%nForced, and the ratio below is meaningless.%n");
+        }
+
+        // target = all.size()/5 is 0 for fewer than five loadable rows, which
+        // leaves validate empty: `validation /= validate.size()` is NaN and
+        // `validate.get(0)` in the live-unit count throws. Reachable by pointing
+        // Trainer at positions.txt, whose 1.0/0.5 labels all fail parseInt and
+        // are dropped one by one in silence.
+        if (split.validate().isEmpty() || split.trainGames().isEmpty()) {
+            System.err.printf("%nnot enough usable rows: %,d training games, %,d holdout positions.%n",
+                    split.trainGames().size(), split.validate().size());
+            System.err.println("Is this the right file? Trainer wants Stockfish centipawns");
+            System.err.println("(runs/labelled.txt), not the 1.0/0.5/0.0 results in positions.txt.");
+            System.exit(2);
+        }
+
+        int independentSamples = split.trainGames().size();
+        double ratio = independentSamples / (double) params;
+        // Small ratios are the interesting ones and %.2f rounds them all to
+        // "0.00x", which hides the difference between 0.8 and 0.0004.
+        String shown = ratio >= 1 ? String.format("%.1fx", ratio)
+                     : ratio >= 0.01 ? String.format("%.2fx", ratio)
+                     : String.format("%.5fx", ratio);
+        System.out.printf("%,d independent samples / %,d parameters = %s%n",
+                independentSamples, params, shown);
+
+        if (ratio >= MIN_RATIO) return;
+
+        System.out.printf("%n%s%n", force ? "BELOW THE FLOOR, forced." : "REFUSING TO TRAIN.");
+        System.out.printf("%s is below the %dx floor, so this network has more%n", shown, MIN_RATIO);
+        System.out.printf("parameters than evidence. It will fit the training set and mean%n");
+        System.out.printf("nothing, which is what happened at 0.8x: held-out loss 0.0086, the%n");
+        System.out.printf("lowest ever recorded here, at -249 Elo.%n%n");
+        System.out.printf("Need about %,d independent games for this architecture. Options:%n",
+                (long) MIN_RATIO * params);
+        System.out.printf("  - more games (Lichess open database, not self-play)%n");
+        System.out.printf("  - fewer parameters (Network.HIDDEN is currently %d)%n%n", Network.HIDDEN);
+
+        if (!force) {
+            System.out.printf("Pass --force to train anyway.%n");
+            System.exit(2);
+        }
+    }
+
+    /**
+     * Held-out loss against how much data produced it.
+     *
+     * This is the diagnostic the first two runs were missing. A curve still
+     * falling at 100% says more data helps, and the slope says roughly how much.
+     * A flat curve says data is NOT the constraint and something else is wrong.
+     * Every single-number metric this project trusted conflated those two cases.
+     *
+     * Subsamples GAMES, so each point is honestly less evidence rather than the
+     * same games sliced thinner.
+     */
+    private static void curve(Split split, int epochs) throws IOException {
+        double[] fractions = {0.1, 0.3, 0.6, 1.0};
+        System.out.printf("%-10s %-10s %-12s %s%n", "fraction", "games", "positions", "held-out loss");
+
+        for (double f : fractions) {
+            int n = Math.max(1, (int) Math.round(split.trainGames().size() * f));
+            List<Sample> train = new ArrayList<>();
+            for (int i = 0; i < n; i++) train.addAll(split.trainGames().get(i));
+            if (train.isEmpty()) continue;
+
+            double loss = trainOnce(train, split.validate(), epochs, false).loss();
+            System.out.printf("%-10s %-10d %-12d %.6f%n",
+                    String.format("%.0f%%", f * 100), n, train.size(), loss);
+        }
+
+        System.out.printf("%nFalling at 100%%: more data helps, and the slope says how much.%n");
+        System.out.printf("Flat: data is not the constraint, and more of it will not help.%n");
+        System.out.printf("Either way this is a proxy. Only SPRT decides. See ADR 0013.%n");
     }
 
     private static Sample toSample(Board b, int cp) {

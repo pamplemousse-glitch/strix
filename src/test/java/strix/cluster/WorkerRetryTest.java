@@ -39,26 +39,43 @@ final class WorkerRetryTest {
     void survivesTheCoordinatorBeingDownWhenItAsks() throws Exception {
         int port = freePort();
 
-        // Nothing is listening yet. The worker must wait rather than die.
+        // Held so it can be closed. ClusterServer's executor is non-daemon and
+        // the socket stays bound, so the previous version leaked both for the
+        // rest of the JVM. The failure inside the thread is captured rather
+        // than thrown, because join() swallows it and the test then fails on an
+        // unrelated assertion that says nothing about what actually broke.
+        java.util.concurrent.atomic.AtomicReference<ClusterServer> server =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Exception> failure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
         Thread startLate = new Thread(() -> {
             try {
                 Thread.sleep(2_000);
                 Coordinator c = new Coordinator(Sprt.standard(),
                         Files.createTempFile("late", ".tsv"), 60_000, 4);
                 c.load();
-                new ClusterServer(c, port).start();
+                ClusterServer s = new ClusterServer(c, port);
+                s.start();
+                server.set(s);
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                failure.set(e);
             }
         });
         startLate.start();
 
         try (Worker w = workerPointedAt(port, 30_000)) {
             Worker.Reply r = w.get("/status");      // connection refused, then refused, then works
+            if (failure.get() != null) {
+                org.junit.jupiter.api.Assertions.fail("coordinator failed to start", failure.get());
+            }
             assertEquals(200, r.status(), "should have retried until the coordinator came up");
             assertTrue(r.body().contains("counted"));
+        } finally {
+            startLate.join();
+            ClusterServer s = server.get();
+            if (s != null) s.close();
         }
-        startLate.join();
     }
 
     @Test
