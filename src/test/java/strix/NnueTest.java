@@ -193,4 +193,50 @@ class NnueTest {
                     "incremental drifted from scratch at ply " + played.size());
         }
     }
+
+    /**
+     * Colour-swap the pieces, flip the board, flip the side to move: the
+     * evaluation must not change.
+     *
+     * This is the only NNUE test here that does not go through
+     * Network.featureIndex to decide what it expects. Every other test compares
+     * Network, Accumulator and Quantized against each other, and all three call
+     * featureIndex, so a perspective or mirroring bug inside it would make all
+     * of them agree and all of them pass.
+     *
+     * The sign is the subtle part and it is easy to get backwards. The eval is
+     * relative to the side to move. After the mirror, the new side to move holds
+     * exactly what the old one held, so the value is the SAME, not negated.
+     */
+    @Test @DisplayName("Colour-swapped mirror evaluates identically, independent of featureIndex")
+    void mirroredPositionEvaluatesTheSame() {
+        for (String fen : POSITIONS) {
+            int direct = NET.evaluate(Fen.parse(fen));
+            int mirrored = NET.evaluate(Fen.parse(mirror(fen)));
+            assertEquals(direct, mirrored, 1,
+                    "perspective/mirror asymmetry on " + fen);
+        }
+    }
+
+    /** Vertical flip plus colour swap, done on the FEN so the test shares no code with the net. */
+    private static String mirror(String fen) {
+        String[] p = fen.trim().split("\\s+");
+        String[] ranks = p[0].split("/");
+        StringBuilder board = new StringBuilder();
+        for (int i = ranks.length - 1; i >= 0; i--) {
+            for (char c : ranks[i].toCharArray()) board.append(swapCase(c));
+            if (i > 0) board.append('/');
+        }
+        StringBuilder castling = new StringBuilder();
+        for (char c : p[2].toCharArray()) castling.append(swapCase(c));
+        String ep = p[3].equals("-") ? "-"
+                : "" + p[3].charAt(0) + (char) ('0' + (9 - (p[3].charAt(1) - '0')));
+        return board + " " + (p[1].equals("w") ? "b" : "w") + " "
+                + (castling.length() == 0 ? "-" : castling.toString()) + " " + ep + " 0 1";
+    }
+
+    private static char swapCase(char c) {
+        if (!Character.isLetter(c)) return c;
+        return Character.isUpperCase(c) ? Character.toLowerCase(c) : Character.toUpperCase(c);
+    }
 }
