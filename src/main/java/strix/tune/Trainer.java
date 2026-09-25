@@ -324,16 +324,42 @@ public final class Trainer {
     /** A sample and the game it came from, so the holdout can keep games whole. */
     private record Tagged(Sample sample, int gameId) {}
 
+    /**
+     * Streamed, not slurped.
+     *
+     * readAllLines held every line as a String alongside the samples built from
+     * them. At the 5.6M-row scale real training data arrives in, that is roughly
+     * a gigabyte of char arrays kept alive for no reason, on top of the samples
+     * themselves. Each line is parsed and discarded now.
+     */
     private static List<Tagged> load(Path path) throws IOException {
         List<Tagged> out = new ArrayList<>();
-        for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-            Dataset.Row row = Dataset.parse(line);
-            if (row == null) continue;
-            try {
-                Board b = Fen.parse(row.fen());
-                int cp = Integer.parseInt(row.label());
-                out.add(new Tagged(toSample(b, cp), row.gameId()));
-            } catch (Exception ignored) { }
+        int inCheck = 0, unparseable = 0;
+
+        try (var reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                Dataset.Row row = Dataset.parse(line);
+                if (row == null) continue;
+                try {
+                    Board b = Fen.parse(row.fen());
+
+                    // A position with the side to move in check is not quiet: its
+                    // value is decided by a forced sequence the static evaluation
+                    // cannot see, so it teaches the net an association that does
+                    // not hold. Stockfish's own data loader drops these, and so
+                    // does bullet's binpack filter.
+                    if (b.inCheck(b.sideToMove)) { inCheck++; continue; }
+
+                    int cp = Integer.parseInt(row.label());
+                    out.add(new Tagged(toSample(b, cp), row.gameId()));
+                } catch (Exception e) {
+                    unparseable++;
+                }
+            }
+        }
+        if (inCheck > 0 || unparseable > 0) {
+            System.out.printf("skipped %,d in check, %,d unparseable%n", inCheck, unparseable);
         }
         return out;
     }
