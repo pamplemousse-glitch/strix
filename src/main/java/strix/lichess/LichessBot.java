@@ -89,7 +89,7 @@ public final class LichessBot {
             if (resp.statusCode() != 200) return 0;
             return countGames(resp.body());
         } catch (Exception e) {
-            System.err.println("could not count games in progress: " + e.getMessage());
+            System.err.println("could not count games in progress: " + describe(e));
             // Zero, not "assume busy". Being wrong here costs a declined
             // challenge; being wrong the other way costs every game from now on.
             return 0;
@@ -196,7 +196,7 @@ public final class LichessBot {
                 Thread.currentThread().interrupt();
                 return false;
             } catch (Exception e) {
-                System.err.println("move " + uci + " attempt " + attempt + " failed: " + e.getMessage());
+                System.err.println("move " + uci + " attempt " + attempt + " failed: " + describe(e));
                 if (attempt == 3) break;
                 try { Thread.sleep(200L * attempt); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -225,7 +225,7 @@ public final class LichessBot {
                         + " " + summarise(resp.body()));
             }
         } catch (Exception e) {
-            System.err.println("POST " + path + " failed: " + e.getMessage());
+            System.err.println("POST " + path + " failed: " + describe(e));
         }
     }
 
@@ -253,7 +253,7 @@ public final class LichessBot {
                     HttpResponse.BodyHandlers.ofString());
             return new Resp(resp.statusCode(), resp.body());
         } catch (Exception e) {
-            System.err.println("POST " + path + " failed: " + e.getMessage());
+            System.err.println("POST " + path + " failed: " + describe(e));
             return new Resp(-1, e.getMessage());
         }
     }
@@ -275,7 +275,7 @@ public final class LichessBot {
             }
             return parseBots(resp.body(), username);
         } catch (Exception e) {
-            System.err.println("could not list online bots: " + e.getMessage());
+            System.err.println("could not list online bots: " + describe(e));
             return List.of();
         }
     }
@@ -312,6 +312,16 @@ public final class LichessBot {
      * documented remedy is to wait a minute rather than to retry faster.
      */
     /** First line of an error body, trimmed, so one bad response cannot flood the log. */
+    /** Class name plus message, because many IOExceptions carry a null message. */
+    static String describe(Throwable e) {
+        if (e == null) return "unknown";
+        String m = e.getMessage();
+        String s = (m == null || m.isBlank()) ? e.getClass().getSimpleName()
+                                              : e.getClass().getSimpleName() + ": " + m;
+        Throwable cause = e.getCause();
+        return (cause != null && cause != e) ? s + " <- " + describe(cause) : s;
+    }
+
     static String summarise(String body) {
         if (body == null || body.isBlank()) return "";
         String first = body.split("\n", 2)[0].trim();
@@ -378,7 +388,7 @@ public final class LichessBot {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                System.err.println("seek loop: " + e.getMessage());
+                System.err.println("seek loop: " + describe(e));
                 try { Thread.sleep(30_000); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     return;
@@ -586,7 +596,7 @@ public final class LichessBot {
                     streamGame(gameId, search, weAreWhite, known);
                     failures = 0;
                 } catch (Exception e) {
-                    System.err.println("game " + gameId + " stream: " + e.getMessage());
+                    System.err.println("game " + gameId + " stream: " + describe(e));
                     failures++;
                 }
                 if (!stillPlaying(gameId)) break;

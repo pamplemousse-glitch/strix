@@ -108,4 +108,17 @@ class LichessBotTest {
         assertTrue(LichessBot.summarise("x".repeat(500)).endsWith("..."));
         assertEquals(163, LichessBot.summarise("x".repeat(500)).length());
     }
+
+    @Test @DisplayName("A null-message exception still names itself")
+    void describesNamelessExceptions() {
+        // Observed in the real log: "POST /api/challenge/x failed: null" and
+        // "game lOh0MvZw stream: null". getMessage() is null for plenty of
+        // IOExceptions, so the line carried no information at all.
+        assertEquals("IOException", LichessBot.describe(new java.io.IOException()));
+        assertEquals("IOException: boom", LichessBot.describe(new java.io.IOException("boom")));
+        assertEquals("unknown", LichessBot.describe(null));
+        assertTrue(LichessBot.describe(
+                new java.io.IOException(new IllegalStateException("root cause")))
+                .contains("root cause"));
+    }
 }
