@@ -406,6 +406,7 @@ Each ADR records what else was considered and what the choice cost.
 - [0019](docs/adr/0019-see.md) Static exchange evaluation, and a prediction that held
 - [0020](docs/adr/0020-external-calibration.md) Measured against something that is not us
 - [0021](docs/adr/0021-nnue-underfit.md) The second NNUE lost 26-0, and why
+- [0022](docs/adr/0022-evaluation-scale-is-a-search-constant.md) The evaluation scale is a search constant
 
 `docs/devlog.md` has the bugs, including a green build that ran zero tests and a bug
 injection that a node-count test happily passed.

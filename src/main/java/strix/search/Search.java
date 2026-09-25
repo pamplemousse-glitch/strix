@@ -48,7 +48,7 @@ public final class Search {
 
     /**
      * Principal variation search. Switchable so the harness can measure it,
-     * which is the only reason to believe it helps. See ADR 0019.
+     * which is the only reason to believe it helps. See ADR 0018.
      */
     public boolean usePvs = true;
 
@@ -60,12 +60,12 @@ public final class Search {
      * bounds [0, 10]. That is not a gain, it is a coin.
      *
      * Kept behind a flag rather than deleted, because the reason it fails is
-     * specific and may not survive a better evaluation. See ADR 0020.
+     * specific and may not survive a better evaluation. See ADR 0018.
      */
     public boolean useNullMove = false;
 
     /**
-     * Late move pruning. OFF by default: it measured negative. See ADR 0023.
+     * Late move pruning. OFF by default: it measured negative. See ADR 0018.
      *
      * Measured together with futility at 20,000 nodes: **-19.2 Elo**, H0 after
      * 362 games at bounds [0, 20].
@@ -78,7 +78,7 @@ public final class Search {
 
     public boolean useLmp = false;
 
-    /** Futility pruning. OFF by default, measured with LMP above. See ADR 0023. */
+    /** Futility pruning. OFF by default, measured with LMP above. See ADR 0018. */
     public boolean useFutility = false;
 
     /** Neither shallow pruning applies above this depth. */
@@ -103,7 +103,7 @@ public final class Search {
      */
     private static final int[] FUTILITY_MARGIN = {0, 150, 300, 500, 750};
 
-    /** Late move reductions. Switchable so the harness can measure it. See ADR 0022. */
+    /** Late move reductions. Switchable so the harness can measure it. See ADR 0018. */
     public boolean useLmr = true;
 
     /** Below this depth there is nothing to save by reducing. */
@@ -149,7 +149,7 @@ public final class Search {
      *
      * Kept behind a flag rather than deleted, because the expected place for it
      * to start paying is at longer time controls, and that is a measurement
-     * nobody has made yet. See ADR 0021.
+     * nobody has made yet. See ADR 0018.
      */
     public boolean useAspiration = false;
 
@@ -453,7 +453,15 @@ public final class Search {
                 int gain = (victim == Piece.NONE)
                         ? Material.VALUE[Piece.QUEEN]   // en passant or promotion
                         : Material.VALUE[Piece.typeOf(victim)];
-                if (standPat + gain + DELTA_MARGIN < alpha) continue;
+
+                // standPat and alpha are in the EVALUATOR's units; gain and the
+                // margin are in material centipawns. Those are only the same
+                // unit when the evaluator happens to agree that a pawn is 100.
+                // A trained net priced one at 31, the right-hand side stopped
+                // ever winning, and this prune silently turned itself off:
+                // 6,498 nodes became 1,017,488 at depth 4 on Kiwipete.
+                int scaled = (gain + DELTA_MARGIN) * evaluator.pawnValue() / 100;
+                if (standPat + scaled < alpha) continue;
             }
 
             board.make(moves[i]);

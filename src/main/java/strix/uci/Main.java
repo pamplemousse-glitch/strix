@@ -31,6 +31,10 @@ public final class Main {
     private final TranspositionTable tt = new TranspositionTable(64);
     private Thread worker;
 
+    /** Which evaluator is actually live, so a match log can prove what played. */
+    private String evalName = "psqt";
+    private String netPath;
+
     public static void main(String[] args) throws Exception {
         new Main().run();
     }
@@ -66,7 +70,7 @@ public final class Main {
                     out("option name ShallowPruning type check default false");
                     out("option name See type check default true");
                     out("option name Quiescence type check default true");
-                    out("option name Eval type combo default psqt var psqt var material");
+                    out("option name Eval type combo default psqt var psqt var material var nnue");
                     out("option name NetFile type string default <empty>");
                     out("option name TuneFile type string default <empty>");
                     out("uciok");
@@ -145,13 +149,45 @@ public final class Main {
                 System.err.println("could not load " + v + ": " + e.getMessage());
             }
         } else if (k.equalsIgnoreCase("NetFile")) {
+            // A failure here used to print to stderr and leave PSQT running, so
+            // a match could be scored as "the net played" when it never loaded.
+            // UciEngine merges stderr into stdout and drops non-UCI lines, so
+            // the message was invisible in a match log too.
             try {
                 search.setEvaluator(strix.nnue.NnueEvaluator.load(java.nio.file.Path.of(v)));
+                evalName = "nnue";
+                netPath = v;
+                out("info string eval=nnue net=" + v);
             } catch (Exception e) {
-                System.err.println("could not load net " + v + ": " + e.getMessage());
+                out("info string ERROR could not load net " + v + ": " + e);
+                out("info string eval=" + evalName + " (net NOT loaded)");
             }
         } else if (k.equalsIgnoreCase("Eval")) {
-            search.setEvaluator(v.equalsIgnoreCase("material") ? new Material() : new Psqt());
+            // Eval and NetFile both used to call setEvaluator with no shared
+            // state, so it was last-writer-wins: sending the combo's declared
+            // default "psqt" after a NetFile silently discarded the net, and
+            // "nnue" fell through to PSQT because the handler had no such
+            // branch. Both now go through one place that reports what is live.
+            if (v.equalsIgnoreCase("nnue")) {
+                if (netPath == null) {
+                    out("info string ERROR Eval=nnue but no NetFile has been loaded");
+                    out("info string eval=" + evalName);
+                } else {
+                    try {
+                        search.setEvaluator(
+                                strix.nnue.NnueEvaluator.load(java.nio.file.Path.of(netPath)));
+                        evalName = "nnue";
+                        out("info string eval=nnue net=" + netPath);
+                    } catch (Exception e) {
+                        out("info string ERROR reloading " + netPath + ": " + e);
+                        out("info string eval=" + evalName);
+                    }
+                }
+            } else {
+                search.setEvaluator(v.equalsIgnoreCase("material") ? new Material() : new Psqt());
+                evalName = v.equalsIgnoreCase("material") ? "material" : "psqt";
+                out("info string eval=" + evalName);
+            }
         }
     }
 

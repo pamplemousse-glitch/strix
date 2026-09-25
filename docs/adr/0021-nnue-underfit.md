@@ -1,7 +1,16 @@
 # ADR 0021: The second NNUE lost 26-0, and why
 
 **Date:** 2026-09-25
-**Status:** rejected. No trained net is enabled. The trainer needs mini-batching.
+**Status:** rejected, and **this ADR's own first diagnosis was wrong**. It is kept
+with the correction attached rather than rewritten, because being confidently
+wrong in a recorded decision is the thing this format exists to catch.
+
+**What it said:** the net was underfit, and the trainer needed mini-batching.
+
+**What was actually true:** the training labels were WHITE-relative and the
+network is SIDE-TO-MOVE relative, so material was analytically cancelled before
+training began. See the correction below. Mini-batching is still worth doing and
+is no longer the headline.
 
 ## What was fixed since ADR 0014, and it was not enough
 
@@ -42,7 +51,43 @@ The loss said the same thing more quietly. Validation settled at 0.068984
 against 0.0735 for predicting a constant 0.5, so the net is **6% better than a
 constant**. It is not broken, it is barely trained.
 
-## Root cause: the learning rate is trapped between two failures
+## The correction: the labels described a different function
+
+`Network.featureIndex` maps own pieces to 0-383 and enemy pieces to 384-767 with
+the board mirrored, so the network's input is **identical** for a position and
+its colour-flipped twin. Nothing in the input says who is White.
+
+Lichess publishes centipawns white-relative. The converter passed them through.
+
+| dataset | stm = white | stm = black | |
+|---|---|---|---|
+| `runs/labelled.txt` (old, via `Label.java`) | +0.88 | **-0.88** | side-to-move relative |
+| the fishnet file this net trained on | +0.71 | **+0.70** | **white-relative** |
+
+With white-relative labels the expected target for a given own-advantage `a` is
+
+```
+0.5 * sigmoid(a) + 0.5 * (1 - sigmoid(a)) = 0.5
+```
+
+exactly. Material is not hard to learn, it is **cancelled**. That is the whole
+explanation for a validation loss 6% better than a constant and a net that
+cannot price a queen.
+
+The decisive control: `runs/net3.bin`, trained by **this same trainer** on the
+old correctly-signed labels, prices a queen at +/-850. The trainer could always
+learn material. The data prevented it.
+
+`Trainer.checkLabelSign` now refuses a dataset whose correlation is weak on
+either side to move, checked per side rather than pooled, because pooled the
+broken file scores +0.03 and hides the inversion.
+
+## The original root cause, which was wrong about this failure
+
+Kept because the measurements in it are real and the reasoning is still true of
+the optimiser; it simply was not what lost the 26-0.
+
+### The learning rate is trapped between two failures
 
 This trainer updates the optimizer once per **sample**. Reference NNUE trainers
 update once per **batch of 16,384**. That single difference creates a vice:

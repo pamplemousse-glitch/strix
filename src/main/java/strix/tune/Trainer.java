@@ -531,43 +531,57 @@ public final class Trainer {
      */
     private static void checkLabelSign(Path data) throws IOException {
         Material material = new Material();
-        List<double[]> pairs = new ArrayList<>();
+        List<double[]> white = new ArrayList<>(), black = new ArrayList<>();
 
         try (var reader = Files.newBufferedReader(data, StandardCharsets.UTF_8)) {
             String line;
-            while ((line = reader.readLine()) != null && pairs.size() < 20_000) {
+            while ((line = reader.readLine()) != null
+                    && white.size() + black.size() < 40_000) {
                 Dataset.Row row = Dataset.parse(line);
                 if (row == null) continue;
                 try {
                     Board b = Fen.parse(row.fen());
-                    pairs.add(new double[]{material.evaluate(b), Integer.parseInt(row.label())});
+                    double[] pair = {material.evaluate(b), Integer.parseInt(row.label())};
+                    (b.sideToMove == Piece.WHITE ? white : black).add(pair);
                 } catch (Exception ignored) { }
             }
         }
-        if (pairs.size() < 100) return;
+        if (white.size() < 100 || black.size() < 100) return;
 
+        // Split by side to move rather than pooled, because pooling hides the
+        // exact failure this exists to catch. The broken dataset scored +0.725
+        // on white-to-move and -0.710 on black-to-move: each frame is strongly
+        // correlated, one of them is inverted, and pooled they cancel to +0.03.
+        // A file that was half-converted, or skewed toward one side, could pool
+        // above any threshold while one frame is still backwards.
+        double rw = correlation(white), rb = correlation(black);
+        System.out.printf("label check: corr(side-to-move material, label) = %+.3f white, %+.3f black%n",
+                rw, rb);
+
+        if (rw < 0.3 || rb < 0.3) {
+            System.out.printf("%nREFUSING TO TRAIN.%n");
+            System.out.printf("Labels do not describe the position the network is shown.%n");
+            System.out.printf("A correct dataset gives roughly +0.7 to +0.9 on BOTH sides.%n%n");
+            System.out.printf("One frame strongly negative means WHITE-relative labels. This%n");
+            System.out.printf("network is side-to-move relative and cannot see which side is%n");
+            System.out.printf("White, so white-relative labels cancel material exactly. Negate%n");
+            System.out.printf("the score when the side to move is black. See ADR 0021.%n");
+            System.exit(2);
+        }
+    }
+
+    private static double correlation(List<double[]> pairs) {
         int n = pairs.size();
-        double mx = pairs.stream().mapToDouble(v -> v[0]).average().orElse(0);
-        double my = pairs.stream().mapToDouble(v -> v[1]).average().orElse(0);
+        double mx = 0, my = 0;
+        for (double[] v : pairs) { mx += v[0]; my += v[1]; }
+        mx /= n; my /= n;
         double num = 0, dx = 0, dy = 0;
         for (double[] v : pairs) {
             num += (v[0] - mx) * (v[1] - my);
             dx += (v[0] - mx) * (v[0] - mx);
             dy += (v[1] - my) * (v[1] - my);
         }
-        double r = (dx > 0 && dy > 0) ? num / Math.sqrt(dx * dy) : 0;
-        System.out.printf("label check: corr(side-to-move material, label) = %+.3f%n", r);
-
-        if (r < 0.3) {
-            System.out.printf("%nREFUSING TO TRAIN.%n");
-            System.out.printf("Labels do not describe the position the network is shown.%n");
-            System.out.printf("A correct dataset gives roughly +0.7 to +0.9 here.%n%n");
-            System.out.printf("The usual cause is WHITE-relative labels. This network is%n");
-            System.out.printf("side-to-move relative and cannot see which side is White, so%n");
-            System.out.printf("white-relative labels cancel material exactly. Negate the score%n");
-            System.out.printf("when the side to move is black. See ADR 0021.%n");
-            System.exit(2);
-        }
+        return (dx > 0 && dy > 0) ? num / Math.sqrt(dx * dy) : 0;
     }
 
     /**
