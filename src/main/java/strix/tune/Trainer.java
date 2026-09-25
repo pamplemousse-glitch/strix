@@ -57,7 +57,31 @@ public final class Trainer {
      */
     private static final int MIN_RATIO = 10;
 
-    private static final float LR = 0.003f;
+    /**
+     * Learning rate, overridable for experiments via -Dstrix.lr=...
+     *
+     * This trainer updates once per SAMPLE. Reference NNUE trainers update once
+     * per batch of 16,384, so at the same nominal rate this takes four orders of
+     * magnitude more steps per epoch and the weights slam into their clip bounds
+     * inside the first epoch.
+     *
+     * Measured on 300k positions, two epochs each:
+     *
+     *   LR       dead units   pre-activation     saturated   validate
+     *   0.003    211/256      [-2.60, 3.24]      99.5%       0.0737
+     *   0.0001     0/256      [-0.90,  0.66]     78.5%       0.0720
+     *   0.00001    0/256      [ 0.20,  0.73]      0.0%       0.0731
+     *
+     * 0.003 is the old default and it is what killed the net in ADR 0014: the
+     * gradient through a saturated clipped ReLU is exactly zero, so a unit that
+     * leaves the window never returns. That ADR blamed data volume. Data volume
+     * was also a problem, but this is what killed the units, and no amount of
+     * data would have fixed it.
+     *
+     * 0.00001 keeps every unit comfortably inside the window and learns too
+     * slowly to be worth it. 0.0001 is the measured middle.
+     */
+    private static final float LR = Float.parseFloat(System.getProperty("strix.lr", "0.0001"));
     private static final float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
 
     /**
@@ -170,9 +194,9 @@ public final class Trainer {
             // falling loss with a dying network is the failure this whole run
             // exists to avoid repeating.
             if (verbose) {
-                System.out.printf("epoch %2d  train %.6f  validate %.6f  live %d/%d %s (%ds)%n",
-                        epoch, loss, validation, liveUnits(net, validate.get(0)), Network.HIDDEN,
-                        better ? "" : "  <- worse", secs);
+                System.out.printf("epoch %2d  train %.6f  validate %.6f %s (%ds)%n",
+                        epoch, loss, validation, better ? "" : "  <- worse", secs);
+                System.out.printf("          %s%n", health(net, validate, 2000));
             }
 
             if (better) {
@@ -261,6 +285,65 @@ public final class Trainer {
         int live = 0;
         for (float v : own) if (v > 0f && v < 1f) live++;
         return live;
+    }
+
+    /**
+     * Pre-activation health across many positions.
+     *
+     * @param dead units whose pre-activation never once landed strictly inside
+     *             the clipped-ReLU window across the whole sample
+     * @param min  lowest pre-activation seen anywhere
+     * @param max  highest
+     * @param mean average
+     * @param saturatedFraction share of all (unit, position) pairs outside [0,1]
+     */
+    record Health(int dead, float min, float max, float mean, double saturatedFraction) {
+        @Override public String toString() {
+            return String.format("dead %d/%d  pre-act [%.2f, %.2f] mean %.2f  saturated %.1f%%",
+                    dead, Network.HIDDEN, min, max, mean, saturatedFraction * 100);
+        }
+    }
+
+    /**
+     * The measurement that would have ended the first NNUE attempt in minutes.
+     *
+     * ADR 0014 records a net where 254 of 256 units were dead because the
+     * accumulator spanned [-15.31, 9.38] against a clipped-ReLU window of
+     * [0, 1], and the gradient through a saturated clipped ReLU is exactly zero,
+     * so a unit that leaves can never return. That was discovered after
+     * training, after quantization, and after several hundred games of chess.
+     *
+     * A single position is not enough to see it: liveUnits above samples one,
+     * and one position can saturate for reasons that say nothing about the net.
+     * This walks a few thousand and reports the distribution.
+     */
+    private static Health health(Network net, List<Sample> samples, int limit) {
+        int n = Math.min(limit, samples.size());
+        if (n == 0) return new Health(0, 0, 0, 0, 0);
+
+        boolean[] everLive = new boolean[Network.HIDDEN];
+        float min = Float.MAX_VALUE, max = -Float.MAX_VALUE;
+        double sum = 0, saturated = 0, count = 0;
+        float[] acc = new float[Network.HIDDEN];
+
+        for (int i = 0; i < n; i++) {
+            Sample s = samples.get(i);
+            System.arraycopy(net.featureBias(), 0, acc, 0, Network.HIDDEN);
+            for (int f : s.own()) net.addTo(acc, f);
+
+            for (int h = 0; h < Network.HIDDEN; h++) {
+                float v = acc[h];
+                if (v > 0f && v < 1f) everLive[h] = true;
+                else saturated++;
+                if (v < min) min = v;
+                if (v > max) max = v;
+                sum += v;
+                count++;
+            }
+        }
+        int dead = 0;
+        for (boolean live : everLive) if (!live) dead++;
+        return new Health(dead, min, max, (float) (sum / count), saturated / count);
     }
 
     private static Network copy(Network n) throws IOException {
