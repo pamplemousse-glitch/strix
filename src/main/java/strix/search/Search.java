@@ -58,6 +58,24 @@ public final class Search {
      */
     public boolean useNullMove = true;
 
+    /** Aspiration windows. Switchable so the harness can measure it. See ADR 0021. */
+    public boolean useAspiration = true;
+
+    /**
+     * Half-width of the first aspiration window, in centipawns.
+     *
+     * Narrow enough that landing inside it is a real saving, wide enough that
+     * an ordinary quiet-move score change does not fall out of it. Roughly a
+     * quarter pawn.
+     */
+    private static final int ASPIRATION_WINDOW = 25;
+
+    /** Below this depth the previous score is not worth trusting. */
+    private static final int ASPIRATION_MIN_DEPTH = 4;
+
+    /** Past this half-width, stop doubling and open the window fully. */
+    private static final int ASPIRATION_MAX_WINDOW = 1000;
+
     /**
      * Plies the null-move search is reduced by, beyond the one it already skips.
      *
@@ -119,11 +137,15 @@ public final class Search {
         int[] rootMoves = moveBuf[0];
         int rootCount = MoveGen.generateLegal(board, rootMoves, scratch[0]);
         if (rootCount == 0) {
-            // Mate or stalemate. NONE is the honest answer here, and the only
-            // place it is, which is why the fallback below can rely on
+            // Mate or stalemate. NONE is the honest answer for the move, and the
+            // only place it is, which is why the fallback below can rely on
             // rootMoves[0] existing.
+            //
+            // The score must distinguish the two: being mated is a loss and a
+            // stalemate is a draw, and returning 0 for both told a caller that
+            // checkmate was equality. Same convention alphaBeta uses at ply 0.
             bestMove = Move.NONE;
-            return 0;
+            return board.inCheck(board.sideToMove) ? -MATE : 0;
         }
         if (rootCount == 1) {
             bestMove = rootMoves[0];
@@ -151,7 +173,49 @@ public final class Search {
         for (int depth = 1; depth <= limits.depth && depth < MAX_PLY; depth++) {
             nodes = 0;
             bestMove = Move.NONE;
-            int score = alphaBeta(board, depth, -INFINITY, INFINITY, 0, true);
+
+            // Aspiration windows.
+            //
+            // The previous iteration's score is a good guess at this one's, so
+            // search a narrow window around it instead of (-INF, +INF). A narrow
+            // window prunes far more, and when the guess is right that is free.
+            //
+            // When it is wrong the search fails high or low, which returns a
+            // BOUND rather than a score, so the window is widened and the
+            // iteration re-run. Widening geometrically rather than jumping
+            // straight to infinity keeps the common case of a slightly-wrong
+            // guess cheap.
+            //
+            // Not used for the first few iterations: there is no previous score
+            // worth trusting, and a shallow search is cheap enough that a failed
+            // window costs more than it saves.
+            int score;
+            if (!useAspiration || depth < ASPIRATION_MIN_DEPTH
+                    || Math.abs(completedScore) > MATE - MAX_PLY) {
+                score = alphaBeta(board, depth, -INFINITY, INFINITY, 0, true);
+            } else {
+                int window = ASPIRATION_WINDOW;
+                int a = completedScore - window;
+                int b = completedScore + window;
+                while (true) {
+                    score = alphaBeta(board, depth, a, b, 0, true);
+                    if (stopped) break;
+                    if (score <= a) {
+                        // Failed low: the true score is at most `a`, so the
+                        // window has to open downward. Beta moves with it,
+                        // because a fail-low means the current best move is
+                        // worse than believed and the whole estimate shifted.
+                        b = (a + b) / 2;
+                        a = Math.max(-INFINITY, a - window);
+                    } else if (score >= b) {
+                        b = Math.min(INFINITY, b + window);   // failed high
+                    } else {
+                        break;                                 // inside the window
+                    }
+                    window *= 2;
+                    if (window > ASPIRATION_MAX_WINDOW) { a = -INFINITY; b = INFINITY; }
+                }
+            }
 
             if (stopped) break;                      // discard the partial result
 

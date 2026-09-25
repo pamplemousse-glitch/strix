@@ -8,7 +8,10 @@ public final class SearchLimits {
     public long wtime = -1, btime = -1, winc = 0, binc = 0;
     public long movetime = -1;
     public long nodes = -1;
-    public int depth = 64;
+    /** Sentinel for "no explicit depth limit". Matches Search.MAX_PLY. */
+    public static final int MAX_DEPTH = 64;
+
+    public int depth = MAX_DEPTH;
     public boolean infinite;
 
     /**
@@ -72,7 +75,16 @@ public final class SearchLimits {
         // take a conservative fixed slice. Moving on a guess beats not moving.
         if (remaining < 0) {
             long other = (sideToMove == Piece.WHITE) ? btime : wtime;
-            if (other < 0) return DEFAULT_BUDGET_MILLIS;
+            if (other < 0) {
+                // No clock anywhere. "go depth N" and "go nodes N" mean search
+                // that far and stop, with no time limit at all, so imposing one
+                // here made a depth-limited search finish at whatever depth the
+                // wall clock allowed. Under load that is nondeterministic:
+                // observed the same depth-4 search returning 945 and 895 on
+                // consecutive runs, which is fatal for a reproducibility test.
+                if (depth < MAX_DEPTH || nodes > 0) return Long.MAX_VALUE;
+                return DEFAULT_BUDGET_MILLIS;
+            }
             remaining = other;
             if (inc <= 0) inc = (sideToMove == Piece.WHITE) ? binc : winc;
         }
