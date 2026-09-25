@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Run an SPRT against a FROZEN build.
+#
+# The harness launches engine subprocesses from a classpath. Left at the default
+# that is a live build directory, so recompiling during a run swaps the engine
+# underneath the measurement and reports one number for two engines. It fails
+# silently: no error, no warning, an ordinary-looking verdict. It has already
+# happened once, to a transposition-table run and a PVS run simultaneously.
+#
+# So: jar first, snapshot it, measure against the snapshot. Editing the tree
+# while this runs is then harmless, which is the point.
+#
+# usage: ops/measure <name> <baseOpts> <candOpts> <elo1> [workers] [nodes] [maxPairs]
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+NAME="${1:?usage: ops/measure <name> <baseOpts> <candOpts> <elo1> [workers] [nodes] [maxPairs]}"
+BASE="${2:--}"
+CAND="${3:--}"
+ELO1="${4:-5}"
+WORKERS="${5:-3}"
+NODES="${6:-20000}"
+PAIRS="${7:-4000}"
+
+SNAP_DIR="$REPO/runs/snapshots"
+SNAP="$SNAP_DIR/$NAME.jar"
+LOG="$REPO/runs/$NAME.tsv"
+OUT="$REPO/runs/$NAME.out"
+
+mkdir -p "$SNAP_DIR"
+./gradlew -q jar
+cp "$REPO/build/libs/strix-0.1.0.jar" "$SNAP"
+
+REV="$(git rev-parse --short HEAD)$(git diff --quiet || echo -dirty)"
+echo "snapshot $SNAP  rev $REV"
+echo "base [$BASE]  cand [$CAND]  elo1 $ELO1  nodes $NODES  workers $WORKERS"
+
+# Recorded next to the log so a result can always be traced to a build.
+cat > "$REPO/runs/$NAME.meta" <<META
+name      $NAME
+rev       $REV
+snapshot  $SNAP
+base      $BASE
+cand      $CAND
+elo1      $ELO1
+nodes     $NODES
+workers   $WORKERS
+META
+
+STRIX_ENGINE_CP="$SNAP" nohup java -cp "$SNAP" strix.harness.Main \
+    "$WORKERS" "$NODES" "$PAIRS" "$LOG" "$BASE" "$CAND" "$ELO1" > "$OUT" 2>&1 &
+
+echo "pid $!  ->  $OUT"

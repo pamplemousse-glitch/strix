@@ -59,6 +59,10 @@ class SearchTest {
 
                 Search pruned = new Search(new Material());
                 pruned.useQuiescence = false;
+                // Null move is a heuristic, not an exact optimization: it can
+                // and does change the score. Only exact techniques belong in a
+                // comparison against unpruned negamax.
+                pruned.useNullMove = false;
                 int prunedScore = pruned.alphaBeta(Fen.parse(fen), depth);
                 long prunedNodes = pruned.nodes;
 
@@ -169,14 +173,20 @@ class SearchTest {
     void pvsIsAnOptimizationNotAnImprovement() {
         for (String fen : POSITIONS) {
             for (int depth = 1; depth <= 5; depth++) {
+                // Null move is off on both sides on purpose. It only fires at
+                // non-PV nodes (beta == alpha + 1), and without PVS there are no
+                // such nodes, so leaving it on would silently make this a
+                // two-variable comparison.
                 Search plain = new Search(new Material());
                 plain.usePvs = false;
+                plain.useNullMove = false;
                 plain.ordering = new Ordering();
                 int plainScore = plain.alphaBeta(Fen.parse(fen), depth);
                 long plainNodes = plain.nodes;
 
                 Search pvs = new Search(new Material());
                 pvs.usePvs = true;
+                pvs.useNullMove = false;
                 pvs.ordering = new Ordering();
                 int pvsScore = pvs.alphaBeta(Fen.parse(fen), depth);
                 long pvsNodes = pvs.nodes;
@@ -196,8 +206,10 @@ class SearchTest {
         for (String fen : POSITIONS) {
             Search plain = new Search(new Material());
             plain.useQuiescence = false;
+            plain.useNullMove = false;
             Search pvs = new Search(new Material());
             pvs.useQuiescence = false;
+            pvs.useNullMove = false;
             pvs.usePvs = true;
             pvs.ordering = new Ordering();
             assertEquals(plain.negamax(Fen.parse(fen), 4), pvs.alphaBeta(Fen.parse(fen), 4),

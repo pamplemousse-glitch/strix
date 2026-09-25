@@ -6,3 +6,4 @@ build/
 runs/
 .lichess-token
 logs/
+runs/snapshots/

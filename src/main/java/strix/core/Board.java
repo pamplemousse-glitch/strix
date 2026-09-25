@@ -180,6 +180,59 @@ public final class Board {
         return ok;
     }
 
+    /**
+     * Passes the turn without moving a piece, for null move pruning.
+     *
+     * Illegal in chess, which is the point: if a side can forfeit a move and the
+     * position is still good enough to fail high, it was far too good to need
+     * searching properly.
+     *
+     * Three pieces of state move. Side to move flips. The en passant square is
+     * cleared, because the right to capture en passant expires immediately and
+     * leaving it set would let the opponent take a pawn that had two turns to
+     * sit there. The halfmove clock is NOT reset: a null move is not a pawn move
+     * or a capture, and resetting it would hide an approaching fifty-move draw.
+     *
+     * Pushed onto the same undo stack as a real move so {@link #unmakeNull}
+     * is symmetric with {@link #unmake}, and so repetition detection sees a
+     * distinct position rather than re-reading the previous one.
+     */
+    public void makeNull() {
+        ensureCapacity();
+        history[ply] = hash;
+        undo[ply++] = packUndo(0xF, castling, epSquare, halfmoveClock);
+
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
+        epSquare = Square.NONE;
+        sideToMove = Piece.other(sideToMove);
+        hash ^= Zobrist.SIDE;
+        halfmoveClock++;
+    }
+
+    public void unmakeNull() {
+        int u = undo[--ply];
+        hash ^= Zobrist.SIDE;
+        sideToMove = Piece.other(sideToMove);
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
+        epSquare = undoEp(u);
+        if (epSquare != Square.NONE) hash ^= Zobrist.EP_FILE[Square.file(epSquare)];
+        castling = undoCastling(u);
+        halfmoveClock = undoClock(u);
+    }
+
+    /**
+     * True when the side to move has a piece other than pawns and the king.
+     *
+     * The zugzwang guard for null move pruning. In a king-and-pawn ending,
+     * having to move is frequently a disadvantage, so "I passed and I am still
+     * winning" stops implying "my real moves are also winning" and the pruning
+     * rule inverts. Material is the cheap, standard proxy.
+     */
+    public boolean hasNonPawnMaterial(int color) {
+        return (pieces(color, Piece.KNIGHT) | pieces(color, Piece.BISHOP)
+                | pieces(color, Piece.ROOK) | pieces(color, Piece.QUEEN)) != 0L;
+    }
+
     public void make(int move) {
         int from = Move.from(move);
         int to = Move.to(move);

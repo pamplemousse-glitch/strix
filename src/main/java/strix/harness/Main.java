@@ -23,7 +23,25 @@ import java.util.Map;
 public final class Main {
 
     private static final List<String> STRIX =
-            List.of("java", "-cp", "build/classes/java/main", "strix.uci.Main");
+            List.of("java", "-cp", engineClasspath(), "strix.uci.Main");
+
+    /**
+     * Classpath the engine subprocesses are launched from.
+     *
+     * Configurable because the default is a live build directory, and a run
+     * that recompiles underneath itself measures two different engines and
+     * reports one number. Observed directly: a transposition-table measurement
+     * and a PVS measurement were both running when null move pruning was
+     * compiled in, and both were silently invalidated mid-flight. Nothing
+     * failed, nothing warned, and the verdicts looked ordinary.
+     *
+     * Point STRIX_ENGINE_CP at a frozen jar for any measurement that matters.
+     * See ops/measure.
+     */
+    private static String engineClasspath() {
+        String cp = System.getenv("STRIX_ENGINE_CP");
+        return (cp == null || cp.isBlank()) ? "build/classes/java/main" : cp;
+    }
 
     public static void main(String[] args) throws Exception {
         int workers = args.length > 0 ? Integer.parseInt(args[0]) : 4;

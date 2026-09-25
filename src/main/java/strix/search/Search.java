@@ -51,6 +51,21 @@ public final class Search {
      * which is the only reason to believe it helps. See ADR 0019.
      */
     public boolean usePvs = true;
+
+    /**
+     * Null move pruning. Switchable so the harness can measure it.
+     * See ADR 0020.
+     */
+    public boolean useNullMove = true;
+
+    /**
+     * Plies the null-move search is reduced by, beyond the one it already skips.
+     *
+     * R=2 is the conventional starting point and is deliberately not adaptive
+     * yet: a fixed R is one thing to measure, and R tuned by depth is a second
+     * change that would confound the first.
+     */
+    private static final int NULL_REDUCTION = 2;
     public TranspositionTable tt;
     public Ordering ordering;
 
@@ -333,6 +348,40 @@ public final class Search {
         if (n == 0) return board.inCheck(board.sideToMove) ? -MATE + ply : 0;
         if (depth == 0) {
             return useQuiescence ? quiescence(board, alpha, beta, ply) : evaluator.evaluate(board);
+        }
+
+        // Null move pruning.
+        //
+        // Forfeit the move. If the position is STILL good enough to fail high
+        // after handing the opponent a free turn, it was far too good to need
+        // searching properly, so cut. The search is reduced, which is what makes
+        // the saving worth the risk of being wrong.
+        //
+        // Four conditions, each load-bearing:
+        //   not a PV node   - beta == alpha + 1 means we only need a bound, and
+        //                     a null-move cutoff IS a bound. Doing this on the
+        //                     principal variation would prune the line we are
+        //                     trying to establish an exact score for.
+        //   not in check    - passing while in check is not merely illegal, it
+        //                     leaves the king capturable and the search would
+        //                     score a position that cannot occur.
+        //   depth > R       - below that the reduced search is a leaf and proves
+        //                     nothing the static eval did not already say.
+        //   non-pawn material - the zugzwang guard. See Board.hasNonPawnMaterial.
+        boolean inCheckHere = board.inCheck(board.sideToMove);
+        if (useNullMove && !root && !inCheckHere
+                && beta == alpha + 1
+                && depth > NULL_REDUCTION
+                && board.hasNonPawnMaterial(board.sideToMove)) {
+
+            board.makeNull();
+            int score = -alphaBeta(board, depth - 1 - NULL_REDUCTION, -beta, -beta + 1, ply + 1, false);
+            board.unmakeNull();
+
+            if (stopped) return 0;
+            // Never return a mate score found through a null move: the mate is
+            // an artifact of a move that does not exist. Cut at beta instead.
+            if (score >= beta) return Math.abs(score) > MATE - MAX_PLY ? beta : score;
         }
 
         int bestScore = -INFINITY;
