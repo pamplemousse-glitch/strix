@@ -80,14 +80,41 @@ contribution is supplying a good first move to try, not its cutoffs.
 **What each feature is worth, measured.** Self-play SPRT at fixed 20,000 nodes per
 move, exact GSPRT with the pentanomial pair model:
 
-| Feature removed | Elo | Games played | Games that were *distinct* |
+| Feature | Elo | Games | Status |
 |---|---|---|---|
-| Piece-square tables | +544.7 | 24 | 24 |
-| Move ordering | +246.6 | 208 | 96 |
-| Transposition table | +33.5 | 770 | 96 |
-| Magic bitboards | +31% nps, 0 Elo by design | n/a | n/a |
-| **Texel tuning** | **-57.6, rejected** | 560 | 96 |
-| **NNUE** | **-330.5, rejected** | 104 | 96 |
+| **Transposition table** | **+147.2** | 50 | **re-measured, clean** |
+| **Principal variation search** | **+26.1** | 746 | **measured, clean** |
+| Piece-square tables | +544.7 | 24 | pre-fix, 24 distinct |
+| Move ordering | +246.6 | 208 | pre-fix, 96 distinct |
+| Magic bitboards | +31% nps, 0 Elo by design | n/a | |
+| **Texel tuning** | **-57.6, rejected** | 560 | pre-fix, 96 distinct |
+| **NNUE** | **-330.5, rejected** | 104 | pre-fix, 96 distinct |
+
+**Rows marked "pre-fix" are not evidence yet.** The harness drew openings as
+`pairIndex % 48` against a 48-line book, and the search is deterministic at a
+fixed node count, so pair 0 and pair 48 were the same game move for move. The LLR
+is linear in the bucket counts, so replaying a sample k times multiplies it by k
+while adding nothing. See [ADR 0016](docs/adr/0016-openings-must-not-repeat.md).
+
+`strix.tools.LogAudit` is the gate that keeps this honest. It derives each pair's
+starting line from its index and reports duplication:
+
+```
+log                               pairs   distinct  replication  verdict
+tt.tsv                               25         25       1.000x  clean
+hash-tight.tsv                      385         48       8.021x  REPLAYED, not evidence
+```
+
+**The transposition table row is the instructive one.** Re-measured on clean data
+it is worth **+147.2 Elo**, not the +33.5 the old run reported. The old number was
+wrong in both directions at once: inflated eightfold in confidence, and far too
+small in magnitude, because it was measuring 48 games over and over instead of
+385 different ones.
+
+Measurements run against a frozen jar via `ops/measure`, because the harness
+launches engines from a classpath and recompiling mid-run silently swaps the
+engine underneath the test. That happened once, to two runs at the same moment,
+and neither one complained.
 
 **The fourth column is a correction, and it matters more than the third.**
 

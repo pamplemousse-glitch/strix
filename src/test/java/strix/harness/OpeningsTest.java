@@ -61,4 +61,18 @@ class OpeningsTest {
         for (int i = 0; i < n; i++) if (Move.toUci(m[i]).equals(uci)) return m[i];
         return Move.NONE;
     }
+
+    @Test @DisplayName("Collisions stay at zero as runs get long")
+    void diversificationScales() {
+        // The rate used to grow with run length, which is the wrong shape: two
+        // pairs sharing a line are the same game, so the longer the run the less
+        // each pair was worth. With two extra plies (~900 continuations per book
+        // line) the measured rate was 0.50% at 400 pairs and 1.65% at 4000.
+        // Four plies is ~810,000 continuations and collisions vanish.
+        for (int n : new int[]{400, 2000, 4000}) {
+            java.util.Set<String> lines = new java.util.HashSet<>();
+            for (int p = 0; p < n; p++) lines.add(Openings.lineFor(p));
+            assertEquals(n, lines.size(), n + " pairs produced a duplicate line");
+        }
+    }
 }

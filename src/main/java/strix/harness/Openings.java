@@ -94,16 +94,30 @@ public final class Openings {
     public static String get(int i) { return BOOK.get(Math.floorMod(i, BOOK.size())); }
 
     /**
-     * How many extra plies a pair on cycle {@code c} gets. Cycle 0 is the plain book.
+     * How many extra plies a pair past the first cycle gets.
      *
-     * Two or four, alternating, and deliberately not more. Random plies unbalance
-     * the position, and while the colour swap inside a pair cancels that on
-     * average, a wildly lost position measures how well both engines convert a
-     * win rather than which is stronger. Two plies already give roughly 30x30
-     * continuations per book line, far more diversity than any run needs.
+     * Four, uniformly, and the number is set by a birthday calculation rather
+     * than by taste. Two plies is roughly 30x30 continuations per book line, so
+     * with n pairs spread over 48 lines the expected collisions are about
+     * n^2/(48*2*900). Measured with the earlier alternating 2-and-4 scheme:
+     *
+     *    400 pairs ->  2 duplicates (0.50%)
+     *   2000 pairs -> 18 duplicates (0.90%)
+     *   4000 pairs -> 66 duplicates (1.65%)
+     *
+     * Two pairs sharing a line are the same game, which is the whole defect
+     * ADR 0016 is about, so a rate that grows with run length is the wrong
+     * shape: the longer the run, the less each pair is worth. Four plies is
+     * ~810,000 continuations per line and pushes collisions below noise at any
+     * run length this project will reach.
+     *
+     * Not more than four, because random plies unbalance the position, and while
+     * the colour swap inside a pair cancels that on average, a wildly lost
+     * starting position measures how well both engines convert a win rather than
+     * which of them is stronger.
      */
     private static int extraPlies(int cycle) {
-        return cycle == 0 ? 0 : (cycle % 2 == 1 ? 2 : 4);    // 0, 2, 4, 2, 4, ...
+        return cycle == 0 ? 0 : 4;
     }
 
     /**

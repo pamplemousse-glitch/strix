@@ -86,4 +86,21 @@ class LogAuditTest {
     void emptyIsNotClean() {
         assertFalse(LogAudit.audit(List.<String>of()).clean());
     }
+
+    @Test @DisplayName("A trace of duplication is immaterial, an eightfold replay is not")
+    void thresholdIsArithmeticNotTolerance() {
+        // The LLR is linear in the counts, so k duplicates in n pairs inflate it
+        // by n/(n-k). One in 373 is a factor of 1.003 and cannot move a verdict;
+        // the defect this gate exists for was a factor of 8.
+        int[] many = new int[400];
+        for (int i = 0; i < 400; i++) many[i] = i;
+        many[399] = 0;                       // one duplicated line out of 400
+        var trace = LogAudit.audit(log(many));
+        assertTrue(trace.clean(), "one duplicate in 400 inflates the LLR by 1.0025");
+        assertTrue(trace.duplicates() >= 1);
+
+        int[] heavy = new int[40];
+        for (int i = 0; i < 40; i++) heavy[i] = i % 4;   // 10x replication
+        assertFalse(LogAudit.audit(log(heavy)).clean());
+    }
 }

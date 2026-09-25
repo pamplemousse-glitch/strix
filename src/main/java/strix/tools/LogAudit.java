@@ -36,12 +36,32 @@ public final class LogAudit {
 
     private LogAudit() {}
 
+    /**
+     * How much duplication disqualifies a run.
+     *
+     * Not zero, and the reason is arithmetic rather than tolerance.
+     * {@link Openings#lineFor} extends a book line with plies seeded from the
+     * pair index, and two different seeds can pick the same moves. Measured: one
+     * duplicate in 373 pairs, about 0.27%.
+     *
+     * The LLR is linear in the counts, so k duplicates in n pairs inflate it by
+     * n/(n-k). At 1% that is a factor of 1.01, which cannot move a verdict. The
+     * defect this gate exists to catch was a factor of 8.
+     *
+     * A threshold of exactly 1.00x would fail honest runs for rounding, which is
+     * the fastest way to teach someone to ignore a gate.
+     */
+    private static final double MAX_REPLICATION = 1.01;
+
     public record Audit(int recorded, int distinctLines, int malformed, boolean legacy) {
-        /** Recorded pairs per genuinely distinct starting line. 1.0 is clean. */
+        /** Recorded pairs per genuinely distinct starting line. 1.0 is perfect. */
         public double replication() {
             return distinctLines == 0 ? 0 : recorded / (double) distinctLines;
         }
-        public boolean clean() { return distinctLines > 0 && recorded == distinctLines; }
+        public int duplicates() { return recorded - distinctLines; }
+        public boolean clean() {
+            return distinctLines > 0 && replication() <= MAX_REPLICATION;
+        }
     }
 
     /**
@@ -120,10 +140,13 @@ public final class LogAudit {
             }
             Audit a = audit(p);
             allClean &= a.clean();
-            System.out.printf("%-28s %10d %10d %11.2fx  %s%s%n",
+            String note = a.clean()
+                    ? (a.duplicates() == 0 ? "clean"
+                            : "clean (" + a.duplicates() + " duplicate line, immaterial)")
+                    : "REPLAYED, not evidence";
+            System.out.printf("%-28s %10d %10d %11.3fx  %s%s%n",
                     p.getFileName(), a.recorded(), a.distinctLines(), a.replication(),
-                    a.clean() ? "clean" : "REPLAYED, not evidence",
-                    a.legacy() ? "  (pre-fix run)" : "");
+                    note, a.legacy() ? "  (pre-fix run)" : "");
         }
 
         if (!allClean) {
